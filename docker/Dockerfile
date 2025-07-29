@@ -47,9 +47,11 @@ RUN ln -sf /usr/lib/x86_64-linux-gnu/libmlx5.so.1 /usr/lib/x86_64-linux-gnu/libm
 
 # Clone and install SGLang
 WORKDIR /sgl-workspace
-RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel html5lib six \
- && git clone --depth=1 https://github.com/sgl-project/sglang.git \
- && cd sglang \
+RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel html5lib six
+RUN mkdir sglang
+
+COPY . sglang/
+RUN cd sglang \
  && case "$CUDA_VERSION" in \
       12.6.1) CUINDEX=126 ;; \
       12.8.1) CUINDEX=128 ;; \
@@ -171,21 +173,7 @@ RUN wget https://github.com/Kitware/CMake/releases/download/v3.31.1/cmake-3.31.1
     && rm -rf cmake-3.31.1-linux-x86_64 cmake-3.31.1-linux-x86_64.tar.gz
 
 # Add yank script
-COPY --chown=root:root <<-"EOF" /usr/local/bin/yank
-#!/bin/bash
-put() {
-  esc=$1
-  test -n "$TMUX" -o -z "${TERM##screen*}" && esc="\033Ptmux;\033$esc\033\\"
-  printf "$esc"
-}
-put "\033]52;c;!\a"
-buf=$( cat "$@" )
-len=$( printf %s "$buf" | wc -c ) max=74994
-test $len -gt $max && echo "$0: input is $(( len - max )) bytes too long" >&2
-put "\033]52;c;$( printf %s "$buf" | head -c $max | base64 | tr -d '\r\n' )\a"
-test -n "$TMUX" && tmux set-buffer "$buf" ||:
-EOF
-
+COPY docker/yank.sh /usr/local/bin/yank
 RUN chmod +x /usr/local/bin/yank
 
 # Install oh-my-zsh and plugins
@@ -194,83 +182,10 @@ RUN sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master
     && git clone https://github.com/zsh-users/zsh-syntax-highlighting.git ${ZSH_CUSTOM:-~/.oh-my-zsh/custom}/plugins/zsh-syntax-highlighting
 
 # Configure Vim
-COPY --chown=root:root <<-"EOF" /root/.vimrc
-function! Yank(text) abort
-  let escape = system('yank', a:text)
-  if v:shell_error
-    echoerr escape
-  else
-    call writefile([escape], '/dev/tty', 'b')
-  endif
-endfunction
-
-noremap <silent> <Leader>y y:<C-U>call Yank(@0)<CR>
-
-" automatically run yank(1) whenever yanking in Vim
-function! CopyYank() abort
-  call Yank(join(v:event.regcontents, "\n"))
-endfunction
-
-autocmd TextYankPost * call CopyYank()
-
-" Basic settings
-set number
-syntax on
-set mouse=a
-filetype indent on
-
-" Indentation
-set autoindent nosmartindent
-set smarttab
-set expandtab
-set shiftwidth=4
-set softtabstop=4
-
-" Visual guides
-set colorcolumn=120
-highlight ColorColumn ctermbg=5
-
-" Status line
-set laststatus=2
-set statusline=%<%f\ %h%m%r%=%{\"[\".(&fenc==\"\"?&enc:&fenc).((exists(\"+bomb\")\ &&\ &bomb)?\",B\":\"\").\"]\ \"}%k\ %-14.(%l,%c%V%)\ %P
-
-" Backspace behavior
-set backspace=2
-
-" Encoding
-set encoding=utf-8
-set fileencoding=utf-8
-EOF
+COPY docker/.vimrc /root/.vimrc
 
 # Configure tmux
-COPY --chown=root:root <<-"EOF" /root/.tmux.conf
-# Pane border styling
-set -g pane-border-style fg='#742727',bg=black
-set -g pane-active-border-style fg=red,bg=black
-
-# Status bar styling
-set -g status-style bg='#0C8A92',fg=black
-
-# Change prefix key to backtick
-set-option -g prefix `
-unbind C-b
-bind-key ` send-prefix
-
-# Split panes using - and = with current path
-unbind '"'
-bind - splitw -v -c '#{pane_current_path}'
-unbind '%'
-bind = splitw -h -c '#{pane_current_path}'
-
-# Vi mode settings
-bind-key -T copy-mode-vi Y send-keys -X copy-pipe 'yank > #{pane_tty}'
-set-window-option -g mode-keys vi
-
-# Other settings
-set-option -g escape-time 0
-set-option -g base-index 1
-set-window-option -g mouse on
-EOF
+COPY docker/.tmux.conf /root/.tmux.conf
 
 # Configure Git
 RUN git config --global core.editor "vim" \
@@ -292,35 +207,7 @@ RUN git config --global core.editor "vim" \
     && git config --global pull.rebase true
 
 # Configure zsh
-COPY --chown=root:root <<-"EOF" /root/.zshrc
-export ZSH="/root/.oh-my-zsh"
-
-# Theme
-ZSH_THEME="robbyrussell"
-
-# Plugins
-plugins=(
-    git
-    z
-    zsh-autosuggestions
-    zsh-syntax-highlighting
-)
-
-source $ZSH/oh-my-zsh.sh
-
-# Aliases
-alias ll='ls -alF'
-alias la='ls -A'
-alias l='ls -CF'
-alias vi='vim'
-
-# Enhanced history
-HISTSIZE=10000
-SAVEHIST=10000
-setopt HIST_IGNORE_ALL_DUPS
-setopt HIST_FIND_NO_DUPS
-setopt INC_APPEND_HISTORY
-EOF
+COPY docker/.zshrc /root/.zshrc
 
 RUN set -euxo ; \
     curl --proto '=https' --tlsv1.2 -sSf https://just.systems/install.sh | bash -s -- --to /usr/local/bin

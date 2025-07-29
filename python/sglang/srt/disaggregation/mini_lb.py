@@ -7,6 +7,7 @@ import dataclasses
 import logging
 import random
 import urllib
+import threading
 from itertools import chain
 from typing import List, Optional
 
@@ -53,6 +54,8 @@ class MiniLoadBalancer:
         self.prefill_configs = prefill_configs
         self.prefill_servers = [p.url for p in prefill_configs]
         self.decode_servers = decode_servers
+        self.flighting_reqs = 0
+        self._lock = threading.Lock()
 
     def add_prefill_server(self, new_prefill_config: PrefillConfig):
         self.prefill_configs.append(new_prefill_config)
@@ -103,6 +106,8 @@ class MiniLoadBalancer:
             else:
                 ret_json = await decode_response.json()
 
+            with self._lock:
+                self.flighting_reqs -= 1
             return ORJSONResponse(
                 content=ret_json,
                 status_code=decode_response.status,
@@ -163,6 +168,9 @@ class MiniLoadBalancer:
                     ):
                         yield chunk
 
+                with self._lock:
+                    self.flighting_reqs -= 1
+
         return StreamingResponse(
             stream_results(),
             media_type="text/event-stream",
@@ -180,6 +188,7 @@ async def health_check():
 
 @app.get("/health_generate")
 async def health_check():
+    rtn_status_code = 200
     prefill_servers, decode_servers = (
         load_balancer.prefill_servers,
         load_balancer.decode_servers,
@@ -188,10 +197,12 @@ async def health_check():
         # Create the tasks
         tasks = []
         for server in chain(prefill_servers, decode_servers):
-            tasks.append(session.post(f"{server}/health_generate"))
-        for i, response in enumerate(asyncio.as_completed(tasks)):
-            await response
-    return Response(status_code=200)
+            tasks.append(session.get(f"{server}/health_generate"))
+        for i, future in enumerate(asyncio.as_completed(tasks)):
+            response = await future
+            if response.status != 200:
+                rtn_status_code = response.status
+    return Response(status_code=rtn_status_code)
 
 
 @app.post("/flush_cache")
@@ -273,7 +284,8 @@ async def handle_generate_request(request_data: dict):
     parsed_url = urllib.parse.urlparse(prefill_server)
     hostname = parsed_url.hostname
     modified_request = request_data.copy()
-
+    with load_balancer._lock:
+        load_balancer.flighting_reqs += 1
     batch_size = _get_request_batch_size(modified_request)
     if batch_size is not None:
         modified_request.update(
