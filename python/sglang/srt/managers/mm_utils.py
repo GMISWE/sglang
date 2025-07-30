@@ -19,7 +19,6 @@ from sglang.srt.managers.schedule_batch import (
     global_server_args_dict,
 )
 from sglang.srt.mem_cache.multimodal_cache_LRU import MultiModalCache
-# from sglang.srt.mem_cache.multimodal_cache import MultiModalCache
 from sglang.srt.model_executor.forward_batch_info import ForwardBatch
 from sglang.srt.utils import flatten_nested_list, print_warning_once
 from sglang.utils import logger
@@ -362,58 +361,6 @@ def _get_precomputed_embedding(
     return None
 
 
-# def _get_chunked_prefill_embedding(
-#     data_embedding_func: Callable[[List[MultimodalDataItem]], torch.Tensor],
-#     embedding_items: List[MultimodalDataItem],
-#     items_size: List[int],
-#     prefix_length: List[int],
-#     extend_length: List[int],
-#     items_offset_list: List[List[Tuple[int, int]]],
-# ) -> Optional[torch.Tensor]:
-#     # Calculate embedding for each request, try to get it from cache to avoid repeated calculation
-#     embedding_list = []
-#     # FIXME(Xinyuan): temporary workaround for eagle3, which may have len(items_size) > len(prefix_length)
-#     max_iterations = min(len(items_size) - 1, len(prefix_length))
-#     for i in range(max_iterations):
-#         if items_size[i] == items_size[i + 1]:
-#             continue
-#         embedding_items_per_req = embedding_items[items_size[i] : items_size[i + 1]]
-#         items_offset = items_offset_list[i]
-#         assert items_offset is not None, items_offset
-#         embedding_items_hash = get_embedding_hash(embedding_items_per_req)
-#         # if all items has been prefixed, we do not need to calculate embedding
-#         if all([offset_end < prefix_length[i] for _, offset_end in items_offset]):
-#             continue
-#         embedding_per_req = embedding_cache.get(embedding_items_hash)
-#         if embedding_per_req is None:
-#             embedding_per_req = data_embedding_func(embedding_items_per_req)
-#             if not embedding_cache.put(embedding_items_hash, embedding_per_req):
-#                 print_warning_once(
-#                     "Multimodal embedding cache is full. Consider increasing the "
-#                     "`SGLANG_VLM_CACHE_SIZE_MB` environment variable."
-#                 )
-
-#         embedding_per_req_chunk, _, end_index = get_embedding_chunk(
-#             embedding=embedding_per_req,
-#             extend_prefix_len=prefix_length[i],
-#             extend_seq_len=extend_length[i] if i < len(extend_length) else 0,
-#             items_offset=items_offset,
-#         )
-#         # remove this item from cache if chunk reaches to the end
-#         embedding_per_req_length = (
-#             embedding_per_req.shape[0]
-#             if embedding_per_req.dim() == 2
-#             else embedding_per_req.shape[0] * embedding_per_req.shape[1]
-#         )
-#         if end_index == embedding_per_req_length:
-#             embedding_cache.free(embedding_items_hash)
-#         embedding_list.append(embedding_per_req_chunk)
-#     if len(embedding_list) == 0:
-#         return None
-#     return torch.concat(embedding_list, dim=0)
-
-
-
 # by kyle
 def _get_chunked_prefill_embedding(
     data_embedding_func: Callable[[List[MultimodalDataItem]], torch.Tensor],
@@ -438,15 +385,14 @@ def _get_chunked_prefill_embedding(
     Returns:
         A tensor of concatenated embeddings for each request
 
-    Optimization:
+    Optimization for images request:
         - make embedding for each image to increase the hit rate
         - try to avoid the situation that requests contain some identical images, but have to calculate the embedding repeatedly
     
-    TODO:
-        - make the multimodalcache a LRU cache
+    Others:
+        - for audio and video and others, we use the original solution
     """
     embedding_list = []
-    # print(f"embedding_items: {embedding_items}")
     # FIXME(Xinyuan): temporary workaround for eagle3, which may have len(items_size) > len(prefix_length)
     max_iterations = min(len(items_size) - 1, len(prefix_length))
     for i in range(max_iterations):
@@ -459,95 +405,96 @@ def _get_chunked_prefill_embedding(
         # if all items has been prefixed, we do not need to calculate embedding
         if all([offset_end < prefix_length[i] for _, offset_end in items_offset]):
             continue
-
-        # embedding_items_hash = get_embedding_hash(embedding_items_per_req)
-        # embedding_per_req = embedding_cache.get(embedding_items_hash)
-        # if embedding_per_req is None:
-        #     embedding_per_req = data_embedding_func(embedding_items_per_req)
-        #     if not embedding_cache.put(embedding_items_hash, embedding_per_req):
-        #         print_warning_once(
-        #             "Multimodal embedding cache is full. Consider increasing the "
-        #             "`SGLANG_VLM_CACHE_SIZE_MB` environment variable."
-        #         )
-
-
-        pixel_values = []
-        mm_item = embedding_items_per_req[0]
-        transport_mode = mm_item.feature.transport_mode
-
-
-        embedding_set = set()
-
-        grid_thws = mm_item.model_specific_data['image_grid_thw'].clone()
-        start_index, end_index = 0, 0
-
-        # get the pixel values for each image using image_grid_thw
-        for img_idx in range(len(grid_thws)):
-            t, h, w = grid_thws[img_idx]
-            # print("[mm utils] t, h, w: ", t, h, w)
-            end_index = start_index + int(t) * int(h) * int(w)
-            # print("[mm utils] start_index, end_index: ", start_index, end_index)
-            pixel_value = mm_item.feature[start_index:end_index]
-            # print(pixel_value.shape)
-            pixel_values.append(pixel_value)
-            start_index = end_index
-
-        hit_count = 0
         
+        mm_item = embedding_items_per_req[0]
+        # check if the item consists of images (optimized)
+        if mm_item.modality == Modality.IMAGE:
+            print(f"Image found in the request", flush=True)
+            pixel_values = []
+            transport_mode = mm_item.feature.transport_mode
 
-        # get the embedding for each image utilizing the derived pixel values
-        embeddings_for_each_image = []
-        for j in range(len(pixel_values)):
-            grid_thw = grid_thws[j:j+1] # Get the i-th row as a 2D tensor
-            pixel_value = pixel_values[j]
+            grid_thws = mm_item.model_specific_data['image_grid_thw']
+            start_index, end_index = 0, 0
+
+            # get the pixel values for each image using image_grid_thw
+            for img_idx in range(len(grid_thws)):
+                t, h, w = grid_thws[img_idx]
+                end_index = start_index + int(t) * int(h) * int(w)
+                pixel_value = mm_item.feature[start_index:end_index]
+                pixel_values.append(pixel_value)
+                start_index = end_index
+
+            hit_count = 0
             
-            mm_item_single = MultimodalDataItem(modality=Modality.IMAGE)
-            # setattr(mm_item_single, "pixel_values", pixel_value)
-            # setattr(mm_item_single, "image_grid_thw", grid_thw)
 
-            setattr(mm_item_single, "feature", pixel_value)
-            setattr(mm_item_single, "model_specific_data", {"image_grid_thw": grid_thw})
+            # get the embedding for each image utilizing the derived pixel values
+            embeddings_for_each_image = []
+            for j in range(len(pixel_values)):
+                grid_thw = grid_thws[j:j+1] # Get the i-th row as a 2D tensor
+                pixel_value = pixel_values[j]
+                
+                mm_item_single = MultimodalDataItem(modality=Modality.IMAGE)
 
-            mm_item_single.feature = TransportProxyTensor(
-                    transport_mode=transport_mode, data=mm_item_single.feature
-            )
-            
+                setattr(mm_item_single, "feature", pixel_value)
+                setattr(mm_item_single, "model_specific_data", {"image_grid_thw": grid_thw})
 
-            img_hash = tensor_hash(pixel_value)
-            # check if the embedding is in the cache
-            img_embedding = embedding_cache.get(img_hash)
-            if img_embedding is not None:
-                hit_count += 1
-                embeddings_for_each_image.append(img_embedding)
-                continue
-
-            img_embedding = data_embedding_func([mm_item_single])
-            embedding_set.add(img_embedding)
-            if not embedding_cache.put(img_hash, img_embedding):
-                print_warning_once(
-                    "Multimodal embedding cache is full. Consider increasing the "
-                    "`SGLANG_VLM_CACHE_SIZE_MB` environment variable."
+                mm_item_single.feature = TransportProxyTensor(
+                        transport_mode=transport_mode, data=mm_item_single.feature
                 )
-            embeddings_for_each_image.append(img_embedding)
+                
 
-        concat_embedding = torch.concat(embeddings_for_each_image, dim=0)
-        print(f"Cache Hit Rate: {(hit_count / len(pixel_values)):.4f}")
-        embedding_per_req = concat_embedding
+                img_hash = tensor_hash(pixel_value)
+                # check if the embedding is in the cache
+                img_embedding = embedding_cache.get(img_hash)
+                if img_embedding is not None:
+                    hit_count += 1
+                    embeddings_for_each_image.append(img_embedding)
+                    continue
 
-        embedding_per_req_chunk, _, end_index = get_embedding_chunk(
-            embedding=embedding_per_req,
-            extend_prefix_len=prefix_length[i],
-            extend_seq_len=extend_length[i] if i < len(extend_length) else 0,
-            items_offset=items_offset,
-        )
-        # # remove this item from cache if chunk reaches to the end
-        # embedding_per_req_length = (
-        #     embedding_per_req.shape[0]
-        #     if embedding_per_req.dim() == 2
-        #     else embedding_per_req.shape[0] * embedding_per_req.shape[1]
-        # )
-        # if end_index == embedding_per_req_length:
-        #     embedding_cache.free(embedding_items_hash)
+                img_embedding = data_embedding_func([mm_item_single])
+                if not embedding_cache.put(img_hash, img_embedding):
+                    print_warning_once(
+                        "Multimodal embedding cache is full. Consider increasing the "
+                        "`SGLANG_VLM_CACHE_SIZE_MB` environment variable."
+                    )
+                embeddings_for_each_image.append(img_embedding)
+
+            concat_embedding = torch.concat(embeddings_for_each_image, dim=0)
+            print(f"Cache Hit Rate: {(hit_count / len(pixel_values)):.4f}", flush=True)
+            embedding_per_req = concat_embedding
+
+            embedding_per_req_chunk, _, end_index = get_embedding_chunk(
+                embedding=embedding_per_req,
+                extend_prefix_len=prefix_length[i],
+                extend_seq_len=extend_length[i] if i < len(extend_length) else 0,
+                items_offset=items_offset,
+            )
+        else: # for audio and video and others
+            embedding_items_hash = get_embedding_hash(embedding_items_per_req)
+            embedding_per_req = embedding_cache.get(embedding_items_hash)
+            if embedding_per_req is None:
+                embedding_per_req = data_embedding_func(embedding_items_per_req)
+                if not embedding_cache.put(embedding_items_hash, embedding_per_req):
+                    print_warning_once(
+                        "Multimodal embedding cache is full. Consider increasing the "
+                        "`SGLANG_VLM_CACHE_SIZE_MB` environment variable."
+                    )
+
+            embedding_per_req_chunk, _, end_index = get_embedding_chunk(
+                embedding=embedding_per_req,
+                extend_prefix_len=prefix_length[i],
+                extend_seq_len=extend_length[i] if i < len(extend_length) else 0,
+                items_offset=items_offset,
+            )
+            # remove this item from cache if chunk reaches to the end
+            embedding_per_req_length = (
+                embedding_per_req.shape[0]
+                if embedding_per_req.dim() == 2
+                else embedding_per_req.shape[0] * embedding_per_req.shape[1]
+            )
+            if end_index == embedding_per_req_length:
+                embedding_cache.free(embedding_items_hash)
+
         embedding_list.append(embedding_per_req_chunk)
     if len(embedding_list) == 0:
         return None
@@ -711,7 +658,6 @@ def embed_mm_inputs(
                     flatten_nested_list([item.offsets for item in mm_inputs.mm_items])
                 )
             items_size = torch.cumsum(items_size, dim=0).tolist()
-
             embedding, mask = get_embedding_and_mask(
                 data_embedding_func=embedder,
                 embedding_items=items,

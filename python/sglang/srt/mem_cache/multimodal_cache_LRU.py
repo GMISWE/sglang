@@ -6,13 +6,21 @@ import torch
 # Define Node of Doubly Linked List for LRU Cache
 class Node:
     def __init__(self, key: int, value: torch.Tensor):
-        self.key = key
-        self.value = value
+        self.key = key # hash of the multimodal inputs
+        self.value = value # embedding of the multimodal inputs
         self.prev = None
         self.next = None
 
 class MultiModalCache:
     """MultiModalCache is used to store vlm encoder results"""
+    """
+    This is a LRU cache for multimodal embeddings.
+    It is used to store the embeddings of the multimodal inputs.
+    It is a doubly linked list with a hash map.
+    The head and tail are dummy nodes.
+    The head.next is the most recently used node.
+    The tail.prev is the least recently used node.
+    """
 
     def __init__(
         self,
@@ -53,7 +61,7 @@ class MultiModalCache:
 
     def put(self, mm_hash: int, embedding: torch.Tensor) -> bool:
         
-        print(f"Put Embedding with hash {mm_hash} into cache.")
+        print(f"Put Embedding with hash {mm_hash} into cache.", flush=True)
         if mm_hash in self.mm_cache:
             node = self.mm_cache[mm_hash]
             self.delete(node)
@@ -63,15 +71,15 @@ class MultiModalCache:
         # check if eviction is needed
         while self.tail.prev != self.head and self.current_size + self._get_tensor_size(embedding) > self.max_size:
             least_used_embedding_size = self._get_tensor_size(self.tail.prev.value)
-            print(f"Evict embedding with hash {self.tail.prev.key} from cache.")
+            print(f"Evict embedding with hash {self.tail.prev.key} from cache.", flush=True)
             del self.mm_cache[self.tail.prev.key]
             self.delete(self.tail.prev)
             self.current_size -= least_used_embedding_size
-            print(f"Current cache size: {self.current_size} bytes, Max size: {self.max_size} bytes")
+            print(f"Current cache size: {self.current_size} bytes, Max size: {self.max_size} bytes", flush=True)
         
         
         if self.current_size + self._get_tensor_size(embedding) > self.max_size:
-            print(f"Embedding with hash {mm_hash} is too large to fit in cache. Skipping insertion.")
+            print(f"Embedding with hash {mm_hash} is too large to fit in cache. Skipping insertion.", flush=True)
             return False
         
         new_node = Node(mm_hash, embedding)
@@ -85,7 +93,7 @@ class MultiModalCache:
     def get(self, mm_hash: int) -> torch.Tensor:
         
         if mm_hash in self.mm_cache:
-            print(f"Embedding with hash {mm_hash} found in cache.")
+            print(f"Embedding with hash {mm_hash} found in cache.", flush=True)
             embedding = self.mm_cache[mm_hash].value
             node = self.mm_cache[mm_hash]
             del self.mm_cache[mm_hash]
@@ -94,12 +102,12 @@ class MultiModalCache:
             self.mm_cache[mm_hash] = self.head.next
             return embedding
         else:
-            print(f"Embedding with hash {mm_hash} not found in cache.")
+            print(f"Embedding with hash {mm_hash} not found in cache.", flush=True)
             return None
 
 
     def free(self, mm_hash: int) -> bool:
-        print("Multimodal Cache Free!!")
+        print("Multimodal Cache Free!!", flush=True)
         if mm_hash not in self.mm_cache:
             return False
         node = self.mm_cache.pop(mm_hash)
@@ -109,7 +117,7 @@ class MultiModalCache:
         return True
 
     def clear(self):
-        print("Multimodal Cache Clear!!")
+        print("Multimodal Cache Clear!!", flush=True)
         self.mm_cache.clear()
         self.current_size = 0
         self.head.next = self.tail
