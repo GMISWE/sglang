@@ -1524,6 +1524,10 @@ async def benchmark(
     print("{:<40} {:<10.2f}".format("P95 ITL (ms):", metrics.p95_itl_ms))
     print("{:<40} {:<10.2f}".format("P99 ITL (ms):", metrics.p99_itl_ms))
     print("{:<40} {:<10.2f}".format("Max ITL (ms):", metrics.max_itl_ms))
+    print("{s:{c}^{n}}".format(s="Time Per Output Token (TPOT)", n=50, c="-"))
+    print("{:<40} {:<10.2f}".format("Mean TPOT (ms):", metrics.mean_tpot_ms))
+    print("{:<40} {:<10.2f}".format("Median TPOT (ms):", metrics.median_tpot_ms))
+    print("{:<40} {:<10.2f}".format("P99 TPOT (ms):", metrics.p99_tpot_ms))
     print("=" * 50)
 
     if (

@@ -96,9 +96,18 @@ class HiCacheHF3FS(HiCacheStorage):
 
         atexit.register(self.close)
 
-        signal.signal(signal.SIGINT, lambda sig, frame: self.close())
-        signal.signal(signal.SIGTERM, lambda sig, frame: self.close())
-        signal.signal(signal.SIGQUIT, lambda sig, frame: self.close())
+        try:
+            signal.signal(signal.SIGINT, lambda sig, frame: self.close())
+        except ValueError:
+            logger.warning("Could not register SIGINT handler in this environment.")
+        try:
+            signal.signal(signal.SIGTERM, lambda sig, frame: self.close())
+        except ValueError:
+            logger.warning("Could not register SIGTERM handler in this environment.")
+        try:
+            signal.signal(signal.SIGQUIT, lambda sig, frame: self.close())
+        except ValueError:
+            logger.warning("Could not register SIGQUIT handler in this environment.")
 
     @staticmethod
     def from_env_config(
