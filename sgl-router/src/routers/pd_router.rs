@@ -844,12 +844,19 @@ impl PDRouter {
 
             tokio::spawn(async move {
                 if let Ok(response) = prefill_future.await {
-                    // Consume at most one small chunk with a very short timeout to advance flow control
-                    let _ = tokio::time::timeout(Duration::from_millis(20), async {
-                        let mut s = response.bytes_stream();
-                        let _ = s.next().await;
-                    })
-                    .await;
+                    // Consume the entire response body to maintain HTTP compliance
+                    // This runs in the background and won't block the decode response
+                    match response.bytes().await {
+                        Ok(bytes) => {
+                            debug!("Prefill response consumed: {} bytes", bytes.len());
+                        }
+                        Err(e) => {
+                            warn!("Failed to consume prefill response body (ignored): {}", e);
+                            //if let Ok(text) = response.text().await {
+                            //    debug!("Successfully read as text: {} chars", text.len());
+                            //}
+                        }
+                    }
                 }
             });
 

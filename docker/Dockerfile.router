@@ -48,10 +48,13 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
     && rustc --version && cargo --version
 
 # pull the github repository
-RUN cd /opt \
-    && git clone --depth=1 https://github.com/sgl-project/sglang.git \
-    && cd /opt/sglang \
-    && git checkout ${SGLANG_REPO_REF}
+RUN mkdir /opt/sglang/
+COPY ./ /opt/sglang/
+RUN cd /opt/sglang/
+#RUN cd /opt \
+#    && git clone --depth=1 https://github.com/sgl-project/sglang.git \
+#    && cd /opt/sglang \
+#    && git checkout ${SGLANG_REPO_REF}
 
 # working directory
 WORKDIR /opt/sglang/sgl-router
