@@ -179,7 +179,40 @@ class OpenAIServingChat(OpenAIServingBase):
                 modalities,
             )
             openai_compatible_messages.append(processed_msg)
+        logger.info(f"==========apply_jinja_template openai_compatible_messages: {openai_compatible_messages}")
 
+        # Normalize assistant tool call arguments: JSON string -> mapping
+        # This makes them compatible with Jinja template blocks that iterate with `|items`.
+        for msg in openai_compatible_messages:
+            try:
+                if (
+                    isinstance(msg, dict)
+                    and msg.get("role") == "assistant"
+                    and isinstance(msg.get("tool_calls"), list)
+                ):
+                    for tool_call in msg["tool_calls"]:
+                        if not isinstance(tool_call, dict):
+                            continue
+                        func = tool_call.get("function")
+                        if isinstance(func, dict):
+                            args_value = func.get("arguments")
+                            if isinstance(args_value, str):
+                                try:
+                                    parsed = json.loads(args_value)
+                                    # Ensure mapping for Jinja `|items`
+                                    if isinstance(parsed, dict):
+                                        func["arguments"] = parsed
+                                    else:
+                                        # Wrap non-dict JSON as a mapping
+                                        func["arguments"] = {"value": parsed}
+                                except Exception:
+                                    # Fallback: wrap raw string to avoid Jinja error
+                                    func["arguments"] = {"__raw__": args_value}
+                    logger.info(f"==========apply_jinja_template openai_compatible_messages after normalization: {openai_compatible_messages}")
+            except Exception:
+                # Be conservative: ignore normalization errors to avoid breaking request processing
+                pass
+        
         # Handle assistant prefix for continue_final_message
         assistant_prefix = None
         if (
