@@ -120,6 +120,18 @@ class OpenAIServingChat(OpenAIServingBase):
     ) -> MessageProcessingResult:
         """Process chat messages and apply chat template"""
         tool_call_constraint = None
+        
+        # Normalize reasoning.enabled to chat_template_kwargs.enable_thinking (bidirectional compat)
+        try:
+            if request.reasoning and isinstance(request.reasoning, dict):
+                enabled = request.reasoning.get("enabled")
+                if enabled is not None:
+                    if request.chat_template_kwargs is None:
+                        request.chat_template_kwargs = {}
+                    # Only set if not explicitly provided to avoid overriding
+                    request.chat_template_kwargs.setdefault("enable_thinking", bool(enabled))
+        except Exception:
+            pass
 
         # Apply chat template and its stop strings
         tools = None
@@ -861,6 +873,15 @@ class OpenAIServingChat(OpenAIServingBase):
         Returns:
             The boolean value of 'enable_thinking' if found and not True, otherwise True.
         """
+        
+        # Priority: reasoning.enabled > chat_template_kwargs.enable_thinking
+        try:
+            if getattr(request, "reasoning", None):
+                if isinstance(request.reasoning, dict) and request.reasoning.get("enabled") is not None:
+                    return bool(request.reasoning.get("enabled"))
+        except Exception:
+            pass
+
         if (
             hasattr(request, "chat_template_kwargs")
             and request.chat_template_kwargs

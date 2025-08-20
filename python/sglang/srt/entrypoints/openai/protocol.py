@@ -456,6 +456,8 @@ class ChatCompletionRequest(BaseModel):
     separate_reasoning: bool = True
     stream_reasoning: bool = True
     chat_template_kwargs: Optional[Dict] = None
+    # OpenAI-style reasoning param. We map reasoning.enabled <-> chat_template_kwargs.enable_thinking
+    reasoning: Optional[Dict] = None
 
     # For request id
     rid: Optional[Union[List[str], str]] = None
