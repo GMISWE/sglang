@@ -188,6 +188,7 @@ class FlashMLABackend(FlashInferMLAAttnBackend):
         encoder_lens: Optional[torch.Tensor],
         forward_mode: ForwardMode,
         spec_info: Optional[SpecInput],
+        extend_prefix_lens: Optional[torch.Tensor] = None,
     ):
         if forward_mode.is_decode_or_idle():
             max_seqlen_pad = triton.cdiv(seq_lens.max().item(), PAGE_SIZE)
@@ -260,6 +261,7 @@ class FlashMLABackend(FlashInferMLAAttnBackend):
         forward_mode: ForwardMode,
         spec_info: Optional[SpecInput],
         seq_lens_cpu: Optional[torch.Tensor],
+        extend_prefix_lens: Optional[torch.Tensor] = None,
     ):
 
         if forward_mode.is_decode_or_idle():

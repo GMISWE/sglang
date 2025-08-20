@@ -215,6 +215,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
         encoder_lens: Optional[torch.Tensor],
         forward_mode: ForwardMode,
         spec_info: Optional[SpecInput],
+        extend_prefix_lens: Optional[torch.Tensor] = None,
     ):
         """Initialize metadata for CUDA graph capture."""
 
@@ -272,6 +273,7 @@ class TRTLLMMLABackend(FlashInferMLAAttnBackend):
         forward_mode: ForwardMode,
         spec_info: Optional[SpecInput],
         seq_lens_cpu: Optional[torch.Tensor],
+        extend_prefix_lens: Optional[torch.Tensor] = None,
     ):
         """Replay CUDA graph with new inputs."""
         # Delegate to parent for non-decode modes.
