@@ -71,6 +71,7 @@ class HybridAttnBackend(AttentionBackend):
         encoder_lens: Optional[torch.Tensor],
         forward_mode: ForwardMode,
         spec_info: Optional[Union[EagleDraftInput, EagleVerifyInput]],
+        extend_prefix_lens: Optional[torch.Tensor] = None,
     ):
         backend = self._select_backend(forward_mode)
         backend.init_forward_metadata_capture_cuda_graph(
@@ -93,6 +94,7 @@ class HybridAttnBackend(AttentionBackend):
         forward_mode: ForwardMode,
         spec_info: Optional[Union[EagleDraftInput, EagleVerifyInput]],
         seq_lens_cpu: Optional[torch.Tensor],
+        extend_prefix_lens: Optional[torch.Tensor] = None,
     ):
         backend = self._select_backend(forward_mode)
         backend.init_forward_metadata_replay_cuda_graph(
