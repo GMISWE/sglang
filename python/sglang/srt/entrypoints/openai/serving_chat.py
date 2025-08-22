@@ -133,17 +133,6 @@ class OpenAIServingChat(OpenAIServingBase):
         except Exception:
             pass
 
-        # Normalize reasoning.enabled to chat_template_kwargs.enable_thinking (bidirectional compat)
-        try:
-            if request.reasoning and isinstance(request.reasoning, dict):
-                enabled = request.reasoning.get("enabled")
-                if enabled is not None:
-                    if request.chat_template_kwargs is None:
-                        request.chat_template_kwargs = {}
-                    # Only set if not explicitly provided to avoid overriding
-                    request.chat_template_kwargs.setdefault("enable_thinking", bool(enabled))
-        except Exception:
-            pass
 
         # Apply chat template and its stop strings
         tools = None
@@ -907,13 +896,16 @@ class OpenAIServingChat(OpenAIServingBase):
         except Exception:
             pass
 
-        if (
-            hasattr(request, "chat_template_kwargs")
-            and request.chat_template_kwargs
-            and request.chat_template_kwargs.get("enable_thinking") is not None
-        ):
-            return request.chat_template_kwargs.get("enable_thinking")
-        return True
+        if hasattr(request, "chat_template_kwargs") and request.chat_template_kwargs:
+            # For Qwen3 models, `enable_thinking` is supported.
+            if request.chat_template_kwargs.get("enable_thinking") is not None:
+                return request.chat_template_kwargs.get("enable_thinking")
+            # For DeepSeek-V3.1 models, `thinking` is supported.
+            elif request.chat_template_kwargs.get("thinking") is not None:
+                return request.chat_template_kwargs.get("thinking")
+            else:
+                return False
+        return False
 
     async def _process_tool_call_stream(
         self,
