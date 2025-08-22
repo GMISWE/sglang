@@ -133,6 +133,18 @@ class OpenAIServingChat(OpenAIServingBase):
         except Exception:
             pass
 
+        # Normalize reasoning.enabled to chat_template_kwargs.enable_thinking (bidirectional compat)
+        try:
+            if request.reasoning and isinstance(request.reasoning, dict):
+                enabled = request.reasoning.get("enabled")
+                if enabled is not None:
+                    if request.chat_template_kwargs is None:
+                        request.chat_template_kwargs = {}
+                    # Only set if not explicitly provided to avoid overriding
+                    request.chat_template_kwargs.setdefault("enable_thinking", bool(enabled))
+        except Exception:
+            pass
+
         # Apply chat template and its stop strings
         tools = None
         if request.tools and request.tool_choice != "none":
@@ -155,7 +167,6 @@ class OpenAIServingChat(OpenAIServingBase):
             result = self._apply_jinja_template(request, tools, is_multimodal)
         else:
             result = self._apply_conversation_template(request, is_multimodal)
-
         result.tool_call_constraint = tool_call_constraint
         return result
 
@@ -180,7 +191,7 @@ class OpenAIServingChat(OpenAIServingBase):
             if message.content is None:
                 message.content = ""
             msg_dict = message.model_dump()
-
+            
             # Process content based on detected template format
             processed_msg = process_content_for_template_format(
                 msg_dict,
@@ -191,7 +202,7 @@ class OpenAIServingChat(OpenAIServingBase):
                 modalities,
             )
             openai_compatible_messages.append(processed_msg)
-        logger.info(f"==========apply_jinja_template openai_compatible_messages: {openai_compatible_messages}")
+        logger.info(f"==========apply_jinja_template openai_compatible_messages:\n {openai_compatible_messages}")
 
         # Normalize assistant tool call arguments: JSON string -> mapping
         # This makes them compatible with Jinja template blocks that iterate with `|items`.
@@ -224,7 +235,7 @@ class OpenAIServingChat(OpenAIServingBase):
             except Exception:
                 # Be conservative: ignore normalization errors to avoid breaking request processing
                 pass
-        
+
         # Handle assistant prefix for continue_final_message
         assistant_prefix = None
         if (
@@ -263,6 +274,13 @@ class OpenAIServingChat(OpenAIServingBase):
                     request.chat_template_kwargs if request.chat_template_kwargs else {}
                 ),
             )
+
+        # Log rendered prompt (decoded) for inspection
+        try:
+            rendered_prompt = self.tokenizer_manager.tokenizer.decode(prompt_ids)
+            logger.info(f"==========rendered_prompt (jinja):\n{rendered_prompt}")
+        except Exception as e:
+            logger.info(f"==========failed to decode rendered prompt for logging: {e}")
 
         if assistant_prefix:
             encoded = self.tokenizer_manager.tokenizer.encode(assistant_prefix)
@@ -337,6 +355,13 @@ class OpenAIServingChat(OpenAIServingBase):
 
         if not is_multimodal:
             prompt_ids = self.tokenizer_manager.tokenizer.encode(prompt)
+
+        # Log rendered prompt for conversation template path
+        try:
+            preview = prompt[:2000] + ("..." if isinstance(prompt, str) and len(prompt) > 2000 else "")
+            logger.info(f"==========rendered_prompt (conversation) preview:\n{preview}")
+        except Exception:
+            pass
 
         return MessageProcessingResult(
             prompt=prompt,
