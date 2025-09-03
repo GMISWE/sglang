@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
+import logging
 import os
 import shutil
 import signal
@@ -8,7 +9,7 @@ from abc import ABC, abstractmethod
 from typing import Generator, List, Optional, Tuple
 
 import torch
-
+logger = logging.getLogger(__name__)
 
 class BaseConnector(ABC):
     """
@@ -26,7 +27,10 @@ class BaseConnector(ABC):
         self.local_dir = tempfile.mkdtemp()
         for sig in (signal.SIGINT, signal.SIGTERM):
             existing_handler = signal.getsignal(sig)
-            signal.signal(sig, self._close_by_signal(existing_handler))
+            try:
+                signal.signal(sig, self._close_by_signal(existing_handler))
+            except ValueError:
+                logger.warning("Could not register signal handler in this environment.")
 
     def get_local_dir(self):
         return self.local_dir

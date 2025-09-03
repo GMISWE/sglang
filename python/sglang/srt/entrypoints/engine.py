@@ -697,7 +697,10 @@ def _set_envs_and_config(server_args: ServerArgs):
             )
             kill_process_tree(os.getpid())
 
-        signal.signal(signal.SIGQUIT, launch_phase_sigquit_handler)
+        try:
+            signal.signal(signal.SIGQUIT, launch_phase_sigquit_handler)
+        except ValueError:
+            logger.warning("Could not register launch phase SIGQUIT handler in this environment.")
 
     # Set mp start method
     mp.set_start_method("spawn", force=True)
