@@ -978,6 +978,7 @@ async def openai_v1_chat_completions(
     request: ChatCompletionRequest, raw_request: Request
 ):
     """OpenAI-compatible chat completion endpoint."""
+    print(22222222222)
     return await raw_request.app.state.openai_serving_chat.handle_request(
         request, raw_request
     )
@@ -1167,6 +1168,9 @@ def launch_server(
     1. The HTTP server, Engine, and TokenizerManager both run in the main process.
     2. Inter-process communication is done through IPC (each process uses a different port) via the ZMQ library.
     """
+    print(11111111111)
+    print(11111111111)
+    print(11111111111)
     if server_args.tokenizer_worker_num > 1:
         setproctitle.setproctitle(f"sglang::http_server/multi_tokenizer_router")
         port_args = PortArgs.init_new(server_args)
