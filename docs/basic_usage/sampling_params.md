@@ -41,6 +41,8 @@ The object is defined at `sampling_params.py::SamplingParams`. You can also read
 | top_p           | `float = 1.0`                                | [Top-p](https://platform.openai.com/docs/api-reference/chat/create#chat-create-top_p) selects tokens from the smallest sorted set whose cumulative probability exceeds `top_p`. When `top_p = 1`, this reduces to unrestricted sampling from all tokens. |
 | top_k           | `int = -1`                                   | [Top-k](https://developer.nvidia.com/blog/how-to-get-better-outputs-from-your-large-language-model/#predictability_vs_creativity) randomly selects from the `k` highest-probability tokens. |
 | min_p           | `float = 0.0`                                | [Min-p](https://github.com/huggingface/transformers/issues/27670) samples from tokens with probability larger than `min_p * highest_token_probability`. |
+| xtc_threshold   | `float = 0.1`                                | Probability cutoff for the Exclude Top Choices sampler. When at least two tokens meet or exceed this probability, XTC may suppress the higher-probability options. |
+| xtc_probability | `float = 0.0`                                | Chance of applying the Exclude Top Choices sampler on a step. Set above 0 to enable; `1.0` makes XTC run whenever the threshold condition is satisfied. |
 
 ### Penalizers
 
@@ -252,6 +254,10 @@ print(response.json())
 ```
 
 Detailed example in [structured outputs](../advanced_features/structured_outputs.ipynb).
+
+### Exclude Top Choices (XTC)
+
+Use `xtc_threshold` and `xtc_probability` to enable the Exclude Top Choices sampler. When the current distribution has at least two tokens whose probabilities meet the threshold and the per-step trigger fires, XTC removes the higher-probability contenders and keeps the least obvious option among them. Newline and EOS tokens are always preserved; if masking them would be required, the sampler skips that step.
 
 ### Custom logit processor
 

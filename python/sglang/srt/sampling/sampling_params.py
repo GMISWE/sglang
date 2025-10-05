@@ -41,6 +41,8 @@ class SamplingParams:
         presence_penalty: float = 0.0,
         repetition_penalty: float = 1.0,
         min_new_tokens: int = 0,
+        xtc_threshold: float = 0.1,
+        xtc_probability: float = 0.0,
         n: int = 1,
         json_schema: Optional[str] = None,
         regex: Optional[str] = None,
@@ -68,6 +70,8 @@ class SamplingParams:
         self.presence_penalty = presence_penalty
         self.repetition_penalty = repetition_penalty
         self.min_new_tokens = min_new_tokens
+        self.xtc_threshold = xtc_threshold
+        self.xtc_probability = xtc_probability
         self.regex = regex
         self.n = n
         self.json_schema = json_schema
@@ -115,6 +119,14 @@ class SamplingParams:
             raise ValueError(
                 "repetition_penalty must be in [0, 2], got "
                 f"{self.repetition_penalty}."
+            )
+        if not 0.0 <= self.xtc_threshold <= 1.0:
+            raise ValueError(
+                f"xtc_threshold must be in [0, 1], got {self.xtc_threshold}."
+            )
+        if not 0.0 <= self.xtc_probability <= 1.0:
+            raise ValueError(
+                f"xtc_probability must be in [0, 1], got {self.xtc_probability}."
             )
         if not 0 <= self.min_new_tokens:
             raise ValueError(

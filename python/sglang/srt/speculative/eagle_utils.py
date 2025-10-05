@@ -405,6 +405,11 @@ class EagleVerifyInput:
                 num_tokens_in_batch=self.draft_token_num,
             )
 
+        sampling_info.apply_xtc(
+            logits_output.next_token_logits,
+            num_tokens_in_batch=self.draft_token_num,
+        )
+
         # Apply penalty
         if sampling_info.penalizer_orchestrator.is_required:
             # This is a relaxed version of penalties for speculative decoding.

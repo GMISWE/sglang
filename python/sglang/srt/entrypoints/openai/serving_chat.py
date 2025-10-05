@@ -382,6 +382,8 @@ class OpenAIServingChat(OpenAIServingBase):
             "top_p": request.top_p,
             "top_k": request.top_k,
             "min_p": request.min_p,
+            "xtc_threshold": request.xtc_threshold,
+            "xtc_probability": request.xtc_probability,
             "presence_penalty": request.presence_penalty,
             "frequency_penalty": request.frequency_penalty,
             "repetition_penalty": request.repetition_penalty,

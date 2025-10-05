@@ -18,6 +18,18 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+def _get_single_token_id(tokenizer, text: str) -> Optional[int]:
+    if tokenizer is None:
+        return None
+    try:
+        token_ids = tokenizer.encode(text, add_special_tokens=False)
+    except Exception:
+        return None
+    if len(token_ids) == 1:
+        return int(token_ids[0])
+    return None
+
+
 @dataclasses.dataclass
 class SamplingBatchInfo:
     # Basic batched sampling params
@@ -66,6 +78,13 @@ class SamplingBatchInfo:
     # Handle logit bias
     logit_bias: Optional[torch.Tensor] = None
 
+    # Exclude Top Choices sampler metadata
+    xtc_thresholds: Optional[torch.Tensor] = None
+    xtc_probabilities: Optional[torch.Tensor] = None
+    xtc_newline_token_ids: Optional[torch.Tensor] = None
+    xtc_eos_token_ids: List[List[int]] = dataclasses.field(default_factory=list)
+    need_xtc_sampling: bool = False
+
     @classmethod
     def from_schedule_batch(cls, batch: ScheduleBatch, vocab_size: int):
         from sglang.srt.managers.schedule_batch import global_server_args_dict
@@ -86,9 +105,32 @@ class SamplingBatchInfo:
         top_ks = torch.tensor(
             [r.sampling_params.top_k for r in reqs], dtype=torch.int32
         ).to(device, non_blocking=True)
+
         min_ps = torch.tensor(
             [r.sampling_params.min_p for r in reqs], dtype=torch.float
         ).to(device, non_blocking=True)
+        xtc_thresholds = torch.tensor(
+            [r.sampling_params.xtc_threshold for r in reqs], dtype=torch.float
+        ).to(device, non_blocking=True)
+        xtc_probabilities = torch.tensor(
+            [r.sampling_params.xtc_probability for r in reqs], dtype=torch.float
+        ).to(device, non_blocking=True)
+        need_xtc_sampling = bool(torch.any(xtc_probabilities > 0).item())
+
+        xtc_newline_token_ids = torch.full(
+            (len(reqs),), -1, dtype=torch.long, device=device
+        )
+        xtc_eos_token_ids: List[List[int]] = []
+        for i, req in enumerate(reqs):
+            newline_id = getattr(req, "xtc_newline_token_id", None)
+            if newline_id is None:
+                tokenizer = getattr(req, "tokenizer", None)
+                newline_id = _get_single_token_id(tokenizer, "\n")
+                req.xtc_newline_token_id = newline_id
+            if newline_id is not None:
+                xtc_newline_token_ids[i] = newline_id
+            eos_ids = sorted(list(req.eos_token_ids)) if req.eos_token_ids else []
+            xtc_eos_token_ids.append(eos_ids)
 
         logit_bias = None
         if any(r.sampling_params.logit_bias is not None for r in reqs):
@@ -165,6 +207,11 @@ class SamplingBatchInfo:
             custom_logit_processor=merged_custom_logit_processor,
             device=device,
             logit_bias=logit_bias,
+            xtc_thresholds=xtc_thresholds,
+            xtc_probabilities=xtc_probabilities,
+            xtc_newline_token_ids=xtc_newline_token_ids,
+            xtc_eos_token_ids=xtc_eos_token_ids,
+            need_xtc_sampling=need_xtc_sampling,
         )
         return ret
 
@@ -224,6 +271,85 @@ class SamplingBatchInfo:
         if self.logit_bias is not None:
             logits.add_(self.logit_bias)
 
+    def apply_xtc(self, logits: torch.Tensor, num_tokens_in_batch: int = 1):
+        """Apply the Exclude Top Choices sampler to logits."""
+        if not self.need_xtc_sampling:
+            return
+        if (
+            self.xtc_thresholds is None
+            or self.xtc_probabilities is None
+            or self.xtc_newline_token_ids is None
+        ):
+            return
+
+        thresholds = self.xtc_thresholds
+        probabilities = self.xtc_probabilities
+        newline_ids = self.xtc_newline_token_ids
+        eos_lists = self.xtc_eos_token_ids
+
+        if num_tokens_in_batch > 1:
+            thresholds = thresholds.repeat_interleave(num_tokens_in_batch)
+            probabilities = probabilities.repeat_interleave(num_tokens_in_batch)
+            newline_ids = newline_ids.repeat_interleave(num_tokens_in_batch)
+            eos_lists = [
+                eos_lists[i]
+                for i in range(len(eos_lists))
+                for _ in range(num_tokens_in_batch)
+            ]
+
+        device = logits.device
+        thresholds = thresholds.to(device)
+        probabilities = probabilities.to(device)
+        newline_ids = newline_ids.to(device)
+
+        if not torch.any(probabilities > 0):
+            return
+
+        trigger_mask = torch.rand(probabilities.shape, device=device) < probabilities
+        if not torch.any(trigger_mask):
+            return
+
+        triggered_indices = trigger_mask.nonzero(as_tuple=False).view(-1)
+        filter_value = float("-inf")
+
+        for idx_tensor in triggered_indices:
+            idx = idx_tensor.item()
+            row_logits = logits[idx]
+
+            sorted_logits, sorted_indices = torch.sort(row_logits, descending=True)
+            finite_mask = torch.isfinite(sorted_logits)
+            if torch.sum(finite_mask) < 2:
+                continue
+
+            probs = torch.softmax(sorted_logits.to(torch.float32), dim=-1)
+            threshold = float(thresholds[idx].item())
+            compare = probs[1:] >= threshold
+            if not torch.any(compare):
+                continue
+
+            to_remove_sorted = torch.zeros_like(sorted_logits, dtype=torch.bool)
+            to_remove_sorted[:-1] = compare
+
+            to_remove = torch.zeros_like(row_logits, dtype=torch.bool)
+            to_remove.scatter_(0, sorted_indices, to_remove_sorted)
+
+            protected_ids = []
+            newline_id = int(newline_ids[idx].item())
+            if newline_id >= 0:
+                protected_ids.append(newline_id)
+            protected_ids.extend(eos_lists[idx])
+
+            if protected_ids:
+                unique_protected = list(dict.fromkeys(int(p) for p in protected_ids if p >= 0))
+                if unique_protected:
+                    protected_tensor = torch.tensor(
+                        unique_protected, dtype=torch.long, device=row_logits.device
+                    )
+                    if torch.any(to_remove.index_select(0, protected_tensor)):
+                        continue
+
+            row_logits.masked_fill_(to_remove, filter_value)
+
     def filter_batch(self, keep_indices: List[int], keep_indices_device: torch.Tensor):
         self.penalizer_orchestrator.filter(keep_indices_device)
 
@@ -235,12 +361,24 @@ class SamplingBatchInfo:
             "top_ps",
             "top_ks",
             "min_ps",
+            "xtc_thresholds",
+            "xtc_probabilities",
+            "xtc_newline_token_ids",
         ]:
             value = getattr(self, item, None)
-            setattr(self, item, value[keep_indices_device])
+            if value is not None:
+                setattr(self, item, value[keep_indices_device])
 
         if self.logit_bias is not None:
             self.logit_bias = self.logit_bias[keep_indices_device]
+
+        if self.xtc_eos_token_ids:
+            self.xtc_eos_token_ids = [self.xtc_eos_token_ids[i] for i in keep_indices]
+
+        if self.need_xtc_sampling:
+            self.need_xtc_sampling = bool(
+                torch.any(self.xtc_probabilities > 0).item()
+            )
 
     def _filter_batch_custom_logit_processor(
         self, keep_indices: List[int], keep_indices_device: torch.Tensor
@@ -339,10 +477,18 @@ class SamplingBatchInfo:
             "top_ps",
             "top_ks",
             "min_ps",
+            "xtc_thresholds",
+            "xtc_probabilities",
+            "xtc_newline_token_ids",
         ]:
             self_val = getattr(self, item, None)
             other_val = getattr(other, item, None)
             setattr(self, item, torch.cat([self_val, other_val]))
+
+        self.xtc_eos_token_ids.extend(other.xtc_eos_token_ids)
+        self.need_xtc_sampling |= other.need_xtc_sampling
+        if self.need_xtc_sampling:
+            self.need_xtc_sampling = bool(torch.any(self.xtc_probabilities > 0).item())
 
         self.is_all_greedy &= other.is_all_greedy
         self.need_top_p_sampling |= other.need_top_p_sampling

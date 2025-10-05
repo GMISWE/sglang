@@ -208,6 +208,8 @@ class CompletionRequest(BaseModel):
     # Extra parameters for SRT backend only and will be ignored by OpenAI models.
     top_k: int = -1
     min_p: float = 0.0
+    xtc_threshold: float = 0.1
+    xtc_probability: float = 0.0
     min_tokens: int = 0
     json_schema: Optional[str] = None
     regex: Optional[str] = None
@@ -436,6 +438,8 @@ class ChatCompletionRequest(BaseModel):
     stream_options: Optional[StreamOptions] = None
     temperature: float = 0.7
     top_p: float = 1.0
+    xtc_threshold: float = 0.1
+    xtc_probability: float = 0.0
     user: Optional[str] = None
     tools: Optional[List[Tool]] = Field(default=None, examples=[None])
     tool_choice: Union[ToolChoice, Literal["auto", "required", "none"]] = Field(
@@ -776,6 +780,8 @@ class ResponsesRequest(BaseModel):
     stop: Optional[Union[str, List[str]]] = None
     top_k: int = -1
     min_p: float = 0.0
+    xtc_threshold: float = 0.1
+    xtc_probability: float = 0.0
     repetition_penalty: float = 1.0
 
     # Default sampling parameters
@@ -784,6 +790,8 @@ class ResponsesRequest(BaseModel):
         "top_p": 1.0,
         "top_k": -1,
         "min_p": 0.0,
+        "xtc_threshold": 0.1,
+        "xtc_probability": 0.0,
         "repetition_penalty": 1.0,
     }
 
@@ -823,6 +831,8 @@ class ResponsesRequest(BaseModel):
             "stop": self.stop,
             "top_k": self.top_k,
             "min_p": self.min_p,
+            "xtc_threshold": self.xtc_threshold,
+            "xtc_probability": self.xtc_probability,
             "repetition_penalty": self.repetition_penalty,
         }
 
