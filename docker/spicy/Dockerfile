@@ -39,3 +39,5 @@ ENV OTEL_EXPORTER_OTLP_INSECURE="true"
 
 # Expose ports
 EXPOSE 22 8000
+
+CMD ["python3", "-m", "sglang.srt.entrypoints.http_server_spicy"]

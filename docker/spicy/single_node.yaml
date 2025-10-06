@@ -1,0 +1,128 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: spicy-test
+---
+# Static local StorageClass for pre-provisioned volumes (no dynamic provisioner)
+# apiVersion: storage.k8s.io/v1
+# kind: StorageClass
+# metadata:
+#   name: spicy-test-storageclass
+# provisioner: kubernetes.io/no-provisioner
+# volumeBindingMode: WaitForFirstConsumer
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: spicy-test-pv
+spec:
+  accessModes:
+    - ReadWriteOnce
+  capacity:
+    storage: 100Gi
+  hostPath:
+    path: /mnt/juicefs/u-00000000/jfs-prod-us-west1/gmi-inference-engine/model_garden/models/deepseek-ai/DeepSeek-V3-0324-W4AFP8
+    type: DirectoryOrCreate
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ie-model-garden-storage-class
+  volumeMode: Filesystem
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: spicy-test-pvc
+  namespace: spicy-test
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi
+  storageClassName: ie-model-garden-storage-class
+  volumeName: spicy-test-pv
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: spicy-server
+  namespace: spicy-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: spicy-server
+  template:
+    metadata:
+      labels:
+        app: spicy-server
+    spec:
+      # OPTIONAL: steer to GPU nodes if you use such labels
+      # nodeSelector:
+      #   nvidia.com/gpu.present: "true"
+      containers:
+        - name: sglang
+          image: us-west1-docker.pkg.dev/devv-404803/gmi-test-repo/sglang_052_spicy:test17
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+              name: http
+          resources:
+            requests:
+              cpu: 80
+              memory: 1600Gi
+              nvidia.com/gpu: 8
+            limits:
+              cpu: 80
+              memory: 1600Gi
+              nvidia.com/gpu: 8
+          volumeMounts:
+            # Mount the single PVC twice using subPaths to match your docker -v’s
+            - name: model-garden
+              mountPath: /mnt/model_garden
+              readOnly: true
+            - mountPath: /dev/shm
+              name: shared-mem
+            - mountPath: /var/run/secrets/kubernetes.io/serviceaccount
+              name: kube-api-access-8krrg
+              readOnly: true
+      volumes:
+      - name: model-garden
+        persistentVolumeClaim:
+          claimName: spicy-test-pvc
+      - emptyDir:
+          medium: Memory
+          sizeLimit: 1400Gi
+        name: shared-mem
+      - name: kube-api-access-8krrg
+        projected:
+          defaultMode: 420
+          sources:
+          - serviceAccountToken:
+              expirationSeconds: 3607
+              path: token
+          - configMap:
+              items:
+              - key: ca.crt
+                path: ca.crt
+              name: kube-root-ca.crt
+          - downwardAPI:
+              items:
+              - fieldRef:
+                  apiVersion: v1
+                  fieldPath: metadata.namespace
+                path: namespace
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: spicy-service
+  namespace: spicy-test
+spec:
+  type: ClusterIP
+  selector:
+    app: spicy-server
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
