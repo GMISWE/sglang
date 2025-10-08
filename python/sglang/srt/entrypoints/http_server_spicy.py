@@ -149,6 +149,8 @@ SPICY_DEFAULT_CLI_ARGS: Tuple[str, ...] = (
     "--attention-backend",
     "fa3",
     "--enable-metrics",
+    "--max-running-requests",
+    "30",
     "--speculative-algorithm",
     "EAGLE",
     "--speculative-num-steps",
@@ -351,6 +353,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 
 @app.exception_handler(HTTPException)
