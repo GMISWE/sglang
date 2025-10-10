@@ -21,12 +21,12 @@ RUN opentelemetry-bootstrap -a install
 # Uninstall system metrics package
 RUN pip uninstall opentelemetry-instrumentation-system-metrics -y
 
-ENV VERSION=1.3.0.ray
+# ENV VERSION=1.3.1.ray
 # Install Robin agent
 RUN robin-install --agent-url https://agent-1306393287.cos.ap-shanghai.myqcloud.com/1.3.1.ray/gmi-python-agent.tar.gz -a install
 
 # Expose ports
 EXPOSE 22 8000
 
-CMD ["opentelemetry-instrument", "--exporter_otlp_protocol", "grpc", "--traces_exporter", "otlp", "--exporter_otlp_insecure", "true", "--exporter_otlp_endpoint", "otel-collector.otel:4317", "--service_name", "qwen3-30b-a3b-Spicy", "python3", "-m", "sglang.srt.entrypoints.http_server_spicy"]
+CMD ["opentelemetry-instrument", "--exporter_otlp_protocol", "grpc", "--traces_exporter", "otlp", "--exporter_otlp_insecure", "true", "--exporter_otlp_endpoint", "otel-collector.otel:4317", "--service_name", "deepseek-ai/DeepSeek-V3-0324-Spicy", "python3", "-m", "sglang.srt.entrypoints.http_server_spicy"]
 # CMD ["python3", "-m", "sglang.srt.entrypoints.http_server_spicy"]
