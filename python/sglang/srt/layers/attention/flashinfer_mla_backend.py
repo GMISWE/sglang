@@ -186,7 +186,7 @@ class FlashInferMLAAttnBackend(AttentionBackend):
         q_indptr_decode_buf: Optional[torch.Tensor] = None,
     ):
         super().__init__()
-
+        self.first_init = True
         # Parse constants
         self.max_context_len = model_runner.model_config.context_len
         self.device = model_runner.device
@@ -328,30 +328,31 @@ class FlashInferMLAAttnBackend(AttentionBackend):
         max_num_tokens: int,
         kv_indices_buf: Optional[torch.Tensor] = None,
     ):
-        if kv_indices_buf is None:
-            cuda_graph_kv_indices = torch.zeros(
-                (max_bs * self.max_context_len,),
-                dtype=torch.int32,
-                device="cuda",
+        if self.first_init:
+            if kv_indices_buf is None:
+                cuda_graph_kv_indices = torch.zeros(
+                    (max_bs * self.max_context_len,),
+                    dtype=torch.int32,
+                    device="cuda",
+                )
+            else:
+                cuda_graph_kv_indices = kv_indices_buf
+            self.cuda_graph_kv_indices = cuda_graph_kv_indices
+            self.cuda_graph_qo_indptr = self.q_indptr_decode.clone()
+            self.cuda_graph_kv_indptr = self.kv_indptr.clone()
+            self.cuda_graph_kv_lens = torch.ones(
+                (max_bs,), dtype=torch.int32, device=self.device
             )
-        else:
-            cuda_graph_kv_indices = kv_indices_buf
 
-        self.cuda_graph_kv_indices = cuda_graph_kv_indices
-        self.cuda_graph_qo_indptr = self.q_indptr_decode.clone()
-        self.cuda_graph_kv_indptr = self.kv_indptr.clone()
-        self.cuda_graph_kv_lens = torch.ones(
-            (max_bs,), dtype=torch.int32, device=self.device
-        )
-
-        # For fast decode plan in graph replaying
-        self.cuda_graph_qo_indptr_cpu = self.cuda_graph_qo_indptr.to("cpu")
-        self.cuda_graph_kv_indptr_cpu = self.cuda_graph_kv_indptr.to("cpu")
-        self.fast_decode_kwargs = {
-            "qo_indptr_cpu": self.cuda_graph_qo_indptr_cpu,
-            "kv_indptr_cpu": self.cuda_graph_kv_indptr_cpu,
-            "kv_indices": self.cuda_graph_kv_indices,
-        }
+            # For fast decode plan in graph replaying
+            self.cuda_graph_qo_indptr_cpu = self.cuda_graph_qo_indptr.to("cpu")
+            self.cuda_graph_kv_indptr_cpu = self.cuda_graph_kv_indptr.to("cpu")
+            self.fast_decode_kwargs = {
+                "qo_indptr_cpu": self.cuda_graph_qo_indptr_cpu,
+                "kv_indptr_cpu": self.cuda_graph_kv_indptr_cpu,
+                "kv_indices": self.cuda_graph_kv_indices,
+            }
+            self.first_init = False
 
     def init_forward_metadata_capture_cuda_graph(
         self,
@@ -409,7 +410,7 @@ class FlashInferMLAAttnBackend(AttentionBackend):
             )
             self.prefill_cuda_graph_metadata[bs] = verify_wrapper
             self.forward_metadata = PrefillMetadata(verify_wrapper, False)
-        elif forward_mode.is_draft_extend():
+        elif forward_mode.is_draft_extend() or forward_mode.is_extend():
             draft_extend_wrapper = BatchMLAPagedAttentionWrapper(
                 self.workspace_buffer,
                 use_cuda_graph=True,
@@ -424,12 +425,17 @@ class FlashInferMLAAttnBackend(AttentionBackend):
                 req_pool_indices,
                 seq_lens,
                 seq_lens_sum,
-                prefix_lens=None,
+                prefix_lens=extend_prefix_lens if forward_mode.is_extend() else None,
                 prefill_wrapper_paged=draft_extend_wrapper,
                 use_ragged=False,
                 spec_info=spec_info,
             )
-            self.prefill_cuda_graph_metadata[bs] = draft_extend_wrapper
+            if forward_mode.is_extend():
+                if seq_lens_sum not in self.prefill_cuda_graph_metadata:
+                    self.prefill_cuda_graph_metadata[seq_lens_sum] = {}
+                self.prefill_cuda_graph_metadata[seq_lens_sum][bs] = draft_extend_wrapper
+            else:
+                self.prefill_cuda_graph_metadata[bs] = draft_extend_wrapper
             self.forward_metadata = PrefillMetadata(draft_extend_wrapper, False)
         else:
             raise ValueError(f"Invalid mode: {forward_mode=}")
@@ -479,13 +485,20 @@ class FlashInferMLAAttnBackend(AttentionBackend):
                 use_ragged=False,
                 spec_info=spec_info,
             )
-        elif forward_mode.is_draft_extend():
+        elif forward_mode.is_draft_extend() or forward_mode.is_extend():
+            if forward_mode.is_extend():
+                prefill_cuda_graph_metadata_tmp = self.prefill_cuda_graph_metadata[
+                    seq_lens_sum
+                ][bs]
+            else:
+                prefill_cuda_graph_metadata_tmp = self.prefill_cuda_graph_metadata[bs]
+            prefix_lens = extend_prefix_lens if forward_mode.is_extend() else None
             self.indices_updater_prefill.update(
                 req_pool_indices[:bs],
                 seq_lens[:bs],
                 seq_lens_sum,
-                prefix_lens=None,
-                prefill_wrapper_paged=self.prefill_cuda_graph_metadata[bs],
+                prefix_lens=prefix_lens,
+                prefill_wrapper_paged=prefill_cuda_graph_metadata_tmp,
                 use_ragged=False,
                 spec_info=spec_info,
             )
@@ -822,11 +835,15 @@ class FlashInferMLAIndicesUpdaterPrefill:
             assert len(seq_lens) == len(req_pool_indices)
             kv_indptr[1 : bs + 1] = torch.cumsum(paged_kernel_lens, dim=0)
             kv_indptr = kv_indptr[: bs + 1]
-            kv_indices = torch.empty(
-                paged_kernel_lens_sum,
-                dtype=torch.int32,
-                device=req_pool_indices.device,
-            )
+            if wrapper_paged._use_cuda_graph:
+                # Directly write to the cuda graph input buffer
+                kv_indices = wrapper_paged._kv_indices_buf
+            else:
+                kv_indices = torch.empty(
+                    paged_kernel_lens_sum,
+                    dtype=torch.int32,
+                    device=req_pool_indices.device,
+                )
             create_flashinfer_kv_indices_triton[(bs,)](
                 self.req_to_token,
                 req_pool_indices,

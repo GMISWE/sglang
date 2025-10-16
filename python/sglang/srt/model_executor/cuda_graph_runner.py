@@ -965,7 +965,7 @@ class CudaGraphRunner:
 
         raw_bs = forward_batch.batch_size
         raw_num_token = (
-            forward_batch.seq_lens_sum
+            forward_batch.extend_num_tokens
             if forward_batch.forward_mode == ForwardMode.EXTEND
             else raw_bs * self.num_tokens_per_bs
         )
@@ -982,7 +982,7 @@ class CudaGraphRunner:
         else:
             index = (
                 bisect.bisect_left(
-                    self.capture_prefill_seqlen, forward_batch.seq_lens_sum
+                    self.capture_prefill_seqlen, forward_batch.extend_num_tokens
                 )
                 if forward_batch.forward_mode == ForwardMode.EXTEND
                 else bisect.bisect_left(self.capture_bs, raw_bs)
@@ -1064,7 +1064,7 @@ class CudaGraphRunner:
             forward_batch.spec_info.custom_mask = self.cuda_graph_buffer.custom_mask
         # Attention backend
         if forward_batch.forward_mode == ForwardMode.EXTEND:
-            seq_lens_sum_pad = forward_batch.seq_lens_sum + (
+            seq_lens_sum_pad = forward_batch.extend_num_tokens + (
                 padding_num_tokens - raw_num_token
             )
         else:
@@ -1144,7 +1144,7 @@ class CudaGraphRunner:
         spec_info = None
         if (
             self.model_runner.spec_algorithm.is_eagle()
-            or model_runner.spec_algorithm.is_standalone()
+            or self.model_runner.spec_algorithm.is_standalone()
         ):
             from sglang.srt.speculative.eagle_utils import EagleVerifyInput
 
