@@ -1823,13 +1823,13 @@ class ModelRunner:
             else (
                 forward_batch.forward_mode.is_cuda_graph
                 or (
-                    forward_batch.forward_mode == ForwardMode.EXTEND
+                    forward_batch.forward_mode.is_extend()
                     and self.graph_runner.enable_prefill_cuda_graph
                 )
             )
         )
         can_run_graph = bool(
-            mode_check()
+            mode_check
             and self.graph_runner
             and self.graph_runner.can_run(forward_batch)
         )

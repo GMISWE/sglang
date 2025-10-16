@@ -176,6 +176,11 @@ class GraphBuffer:
                 dtype=torch.bool,
                 device=device,
             )
+            self.next_token_logits_buffer = torch.zeros(
+                (max_num_token, model_runner.model_config.vocab_size),
+                dtype=torch.float,
+                device=device,
+            )
 
 
 @contextmanager
@@ -523,17 +528,17 @@ class CudaGraphRunner:
         else:
             cuda_graph_bs = forward_batch.batch_size
 
-        if forward_batch.forward_mode == ForwardMode.EXTEND:
+        if forward_batch.forward_mode.is_extend():
             is_bs_supported = (
                 (
                     self.enable_prefill_cuda_graph
-                    and forward_batch.seq_lens_sum in self.prefill_graphs
+                    and forward_batch.extend_num_tokens in self.prefill_graphs
                     and cuda_graph_bs <= self.cuda_graph_prefill_max_bs
                 )
                 if self.disable_padding
                 else (
                     self.enable_prefill_cuda_graph
-                    and forward_batch.seq_lens_sum <= self.prefill_num_tokens_per_bs
+                    and forward_batch.extend_num_tokens <= self.prefill_num_tokens_per_bs
                     and cuda_graph_bs <= self.cuda_graph_prefill_max_bs
                 )
             )
@@ -609,7 +614,7 @@ class CudaGraphRunner:
                 )
                 if (
                     hasattr(self, "capture_forward_mode")
-                    and self.capture_forward_mode == ForwardMode.EXTEND
+                    and self.capture_forward_mode.is_extend()
                 ):
                     capture_range = (
                         tqdm.tqdm(list(self.capture_prefill_seqlen))
@@ -625,7 +630,7 @@ class CudaGraphRunner:
                         )
                         if (
                             hasattr(self, "capture_forward_mode")
-                            and self.capture_forward_mode == ForwardMode.EXTEND
+                            and self.capture_forward_mode.is_extend()
                         ):
                             capture_range.set_description(
                                 f"Capturing prefill seqlen ({bs_or_seqlen=} {avail_mem=:.2f} GB)"
@@ -640,20 +645,21 @@ class CudaGraphRunner:
                         (
                             (bs_or_seqlen in self.compile_prefill_seqlen)
                             if hasattr(self, "capture_forward_mode")
-                            and self.capture_forward_mode == ForwardMode.EXTEND
+                            and self.capture_forward_mode.is_extend()
                             else (bs_or_seqlen in self.compile_bs)
                         ),
                         num_tokens=(
                             (bs_or_seqlen)
                             if hasattr(self, "capture_forward_mode")
-                            and self.capture_forward_mode == ForwardMode.EXTEND
+                            and self.capture_forward_mode.is_extend()
                             else (bs_or_seqlen * self.num_tokens_per_bs)
                         ),
                         tp_group=self.model_runner.tp_group,
                     ) as forward:
-                        if self.capture_forward_mode == ForwardMode.EXTEND:
+                        if self.capture_forward_mode.is_extend():
+                            prefill_max_bs_step = min(bs_or_seqlen, self.cuda_graph_prefill_max_bs)
                             for bs_prefill_capture in range(
-                                self.cuda_graph_prefill_max_bs
+                                prefill_max_bs_step
                             ):
                                 (
                                     graph,
@@ -715,7 +721,7 @@ class CudaGraphRunner:
         stream = self.stream
         if (
             hasattr(self, "capture_forward_mode")
-            and self.capture_forward_mode == ForwardMode.EXTEND
+            and self.capture_forward_mode.is_extend()
         ):
             self.cuda_graph_buffer = self.prefill_graph_buffer
         else:
@@ -723,9 +729,10 @@ class CudaGraphRunner:
 
         if (
             hasattr(self, "capture_forward_mode")
-            and self.capture_forward_mode == ForwardMode.EXTEND
+            and self.capture_forward_mode.is_extend()
         ):
             num_tokens = bs_or_seqlen
+            out_num_tokens = bs_capture * self.num_tokens_per_bs
             bs = bs_capture
             self.cuda_graph_buffer.seq_lens[:bs_capture].copy_(
                 torch.tensor(
@@ -737,6 +744,7 @@ class CudaGraphRunner:
             )
         else:
             num_tokens = bs_or_seqlen * self.num_tokens_per_bs
+            out_num_tokens = num_tokens
             bs = bs_or_seqlen
 
         # Graph inputs
@@ -751,13 +759,14 @@ class CudaGraphRunner:
             encoder_lens = None
 
         mrope_positions = self.cuda_graph_buffer.mrope_positions[:, :bs]
+        next_token_logits_buffer = self.cuda_graph_buffer.next_token_logits_buffer[:out_num_tokens]
         self.cuda_graph_buffer.num_token_non_padded[...] = num_tokens
 
         # pipeline parallelism
         if self.pp_size > 1:
             if (
                 hasattr(self, "capture_forward_mode")
-                and self.capture_forward_mode == ForwardMode.EXTEND
+                and self.capture_forward_mode.is_extend()
             ):
                 pp_proxy_tensors = PPProxyTensors(
                     {
@@ -829,6 +838,7 @@ class CudaGraphRunner:
             req_pool_indices=req_pool_indices,
             seq_lens=seq_lens,
             orig_seq_lens=seq_lens,
+            next_token_logits_buffer=next_token_logits_buffer,
             req_to_token_pool=self.model_runner.req_to_token_pool,
             token_to_kv_pool=self.model_runner.token_to_kv_pool,
             attn_backend=self.model_runner.attn_backend,
@@ -853,13 +863,13 @@ class CudaGraphRunner:
             extend_prefix_lens=(
                 self.cuda_graph_buffer.extend_prefix_lens[:bs]
                 if hasattr(self, "capture_forward_mode")
-                and self.capture_forward_mode == ForwardMode.EXTEND
+                and self.capture_forward_mode.is_extend()
                 else None
             ),
             extend_seq_lens=(
                 seq_lens
                 if hasattr(self, "capture_forward_mode")
-                and self.capture_forward_mode == ForwardMode.EXTEND
+                and self.capture_forward_mode.is_extend()
                 else None
             ),
         )
@@ -956,7 +966,7 @@ class CudaGraphRunner:
         forward_batch: ForwardBatch,
         pp_proxy_tensors: Optional[PPProxyTensors] = None,
     ):
-        if forward_batch.forward_mode == ForwardMode.EXTEND:
+        if forward_batch.forward_mode.is_extend():
             self.cuda_graph_buffer = self.prefill_graph_buffer
         else:
             self.cuda_graph_buffer = self.decode_graph_buffer
@@ -966,7 +976,7 @@ class CudaGraphRunner:
         raw_bs = forward_batch.batch_size
         raw_num_token = (
             forward_batch.extend_num_tokens
-            if forward_batch.forward_mode == ForwardMode.EXTEND
+            if forward_batch.forward_mode.is_extend()
             else raw_bs * self.num_tokens_per_bs
         )
 
@@ -984,17 +994,17 @@ class CudaGraphRunner:
                 bisect.bisect_left(
                     self.capture_prefill_seqlen, forward_batch.extend_num_tokens
                 )
-                if forward_batch.forward_mode == ForwardMode.EXTEND
+                if forward_batch.forward_mode.is_extend()
                 else bisect.bisect_left(self.capture_bs, raw_bs)
             )
         bs = (
             raw_bs
-            if forward_batch.forward_mode == ForwardMode.EXTEND
+            if forward_batch.forward_mode.is_extend()
             else self.capture_bs[index]
         )
         padding_num_tokens = (
             self.capture_prefill_seqlen[index]
-            if forward_batch.forward_mode == ForwardMode.EXTEND
+            if forward_batch.forward_mode.is_extend()
             else self.num_tokens_per_bs * bs
         )
         if bs != raw_bs:
@@ -1063,7 +1073,7 @@ class CudaGraphRunner:
         if forward_batch.forward_mode.is_idle() and forward_batch.spec_info is not None:
             forward_batch.spec_info.custom_mask = self.cuda_graph_buffer.custom_mask
         # Attention backend
-        if forward_batch.forward_mode == ForwardMode.EXTEND:
+        if forward_batch.forward_mode.is_extend():
             seq_lens_sum_pad = forward_batch.extend_num_tokens + (
                 padding_num_tokens - raw_num_token
             )
@@ -1112,7 +1122,7 @@ class CudaGraphRunner:
             )
 
         # Replay
-        if forward_batch.forward_mode == ForwardMode.EXTEND:
+        if forward_batch.forward_mode.is_extend():
             self.cuda_graph_buffer.graphs[self.num_token][self.raw_bs].replay()
             output = self.cuda_graph_buffer.output_buffers[self.num_token][self.raw_bs]
         else:
@@ -1123,13 +1133,13 @@ class CudaGraphRunner:
             return LogitsProcessorOutput(
                 next_token_logits=(
                     output.next_token_logits[: self.raw_bs]
-                    if forward_batch.forward_mode == ForwardMode.EXTEND
+                    if forward_batch.forward_mode.is_extend()
                     else output.next_token_logits[: self.raw_num_token]
                 ),
                 hidden_states=(
                     (
                         output.hidden_states[: self.raw_bs]
-                        if forward_batch.forward_mode == ForwardMode.EXTEND
+                        if forward_batch.forward_mode.is_extend()
                         else output.hidden_states[: self.raw_num_token]
                     )
                     if output.hidden_states is not None
