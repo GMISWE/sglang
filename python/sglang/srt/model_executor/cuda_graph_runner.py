@@ -98,7 +98,13 @@ class GraphBuffer:
             self.input_ids = torch.zeros((max_num_token,), dtype=torch.int64)
             self.req_pool_indices = torch.zeros((max_bs,), dtype=torch.int32)
             self.seq_lens = torch.full((max_bs,), 1, dtype=torch.int32)
-            self.extend_prefix_lens = torch.zeros_like(self.seq_lens)
+            self.seq_lens_cpu = torch.full((max_bs,), 1, dtype=torch.int32, device="cpu")
+            self.extend_seq_lens = torch.full((max_bs,), 1, dtype=torch.int32)
+            self.extend_start_loc = torch.zeros((max_bs,), dtype=torch.int32)
+            self.extend_prefix_lens = torch.zeros((max_bs), dtype=torch.int32)
+            self.extend_seq_lens_cpu = torch.full((max_bs,), 1, dtype=torch.int32, device="cpu")
+            self.extend_prefix_lens_cpu = torch.zeros((max_bs), dtype=torch.int32, device="cpu")
+            self.extend_logprob_start_lens_cpu = torch.zeros((max_bs), dtype=torch.int32, device='cpu') 
             self.out_cache_loc = torch.zeros((max_num_token,), dtype=torch.int64)
             self.positions = torch.zeros((max_num_token,), dtype=torch.int64)
             self.mrope_positions = torch.zeros((3, max_bs), dtype=torch.int64)
@@ -738,6 +744,14 @@ class CudaGraphRunner:
                 torch.tensor(
                     [
                         bs_or_seqlen - bs_capture + 1 if i == bs_capture - 1 else 1
+                        for i in range(bs_capture) 
+                    ]
+                )
+            )
+            self.cuda_graph_buffer.extend_seq_lens[:bs_capture].copy_(
+                torch.tensor(
+                    [
+                        bs_or_seqlen - bs_capture + 1 if i == bs_capture - 1 else 1
                         for i in range(bs_capture)
                     ]
                 )
@@ -751,6 +765,8 @@ class CudaGraphRunner:
         input_ids = self.cuda_graph_buffer.input_ids[:num_tokens]
         req_pool_indices = self.cuda_graph_buffer.req_pool_indices[:bs]
         seq_lens = self.cuda_graph_buffer.seq_lens[:bs]
+        seq_lens_cpu = self.cuda_graph_buffer.seq_lens_cpu[:bs]
+        extend_seq_lens = self.cuda_graph_buffer.extend_seq_lens[:bs]
         out_cache_loc = self.cuda_graph_buffer.out_cache_loc[:num_tokens]
         positions = self.cuda_graph_buffer.positions[:num_tokens]
         if self.is_encoder_decoder:
@@ -831,14 +847,16 @@ class CudaGraphRunner:
         else:
             lora_ids = None
 
+        #next_token_logits_buffer=next_token_logits_buffer,
+        #num_token_non_padded=(self.cuda_graph_buffer.num_token_non_padded),
         forward_batch = ForwardBatch(
             forward_mode=self.capture_forward_mode,
             batch_size=bs,
             input_ids=input_ids,
             req_pool_indices=req_pool_indices,
             seq_lens=seq_lens,
+            seq_lens_cpu=seq_lens_cpu,
             orig_seq_lens=seq_lens,
-            next_token_logits_buffer=next_token_logits_buffer,
             req_to_token_pool=self.model_runner.req_to_token_pool,
             token_to_kv_pool=self.model_runner.token_to_kv_pool,
             attn_backend=self.model_runner.attn_backend,
@@ -857,7 +875,6 @@ class CudaGraphRunner:
             spec_algorithm=self.model_runner.spec_algorithm,
             spec_info=spec_info,
             capture_hidden_mode=self.capture_hidden_mode,
-            num_token_non_padded=(self.cuda_graph_buffer.num_token_non_padded),
             global_forward_mode=self.capture_forward_mode,
             lora_ids=lora_ids,
             extend_prefix_lens=(
@@ -867,7 +884,31 @@ class CudaGraphRunner:
                 else None
             ),
             extend_seq_lens=(
-                seq_lens
+                extend_seq_lens
+                if hasattr(self, "capture_forward_mode")
+                and self.capture_forward_mode.is_extend()
+                else None
+            ),
+            extend_start_loc=(
+                self.cuda_graph_buffer.extend_start_loc[:bs]
+                if hasattr(self, "capture_forward_mode")
+                and self.capture_forward_mode.is_extend()
+                else None
+            ),
+            extend_logprob_start_lens_cpu=(
+                self.cuda_graph_buffer.extend_logprob_start_lens_cpu[:bs]
+                if hasattr(self, "capture_forward_mode")
+                and self.capture_forward_mode.is_extend()
+                else None
+            ),
+            extend_prefix_lens_cpu=(
+                self.cuda_graph_buffer.extend_prefix_lens_cpu[:bs]
+                if hasattr(self, "capture_forward_mode")
+                and self.capture_forward_mode.is_extend()
+                else None
+            ),
+            extend_seq_lens_cpu=(
+                self.cuda_graph_buffer.extend_seq_lens_cpu[:bs]
                 if hasattr(self, "capture_forward_mode")
                 and self.capture_forward_mode.is_extend()
                 else None
@@ -1009,7 +1050,14 @@ class CudaGraphRunner:
         )
         if bs != raw_bs:
             self.cuda_graph_buffer.seq_lens.fill_(self.seq_len_fill_value)
+            self.cuda_graph_buffer.seq_lens_cpu.fill_(self.seq_len_fill_value)
+            self.cuda_graph_buffer.extend_seq_lens.fill_(self.seq_len_fill_value)
+            self.cuda_graph_buffer.extend_seq_lens_cpu.fill_(self.seq_len_fill_value)
             self.cuda_graph_buffer.out_cache_loc.zero_()
+            self.cuda_graph_buffer.extend_start_loc.zero_()
+            self.cuda_graph_buffer.extend_prefix_lens.zero_()
+            self.cuda_graph_buffer.extend_prefix_lens_cpu.zero_()
+            self.cuda_graph_buffer.extend_logprob_start_lens_cpu.zero_()
 
         # Common inputs
         self.cuda_graph_buffer.input_ids[:raw_num_token].copy_(forward_batch.input_ids)
@@ -1017,6 +1065,14 @@ class CudaGraphRunner:
             forward_batch.req_pool_indices
         )
         self.cuda_graph_buffer.seq_lens[:raw_bs].copy_(forward_batch.seq_lens)
+        self.cuda_graph_buffer.seq_lens_cpu[:raw_bs].copy_(forward_batch.seq_lens_cpu)
+        if forward_batch.forward_mode.is_extend(): 
+            self.cuda_graph_buffer.extend_seq_lens[:raw_bs].copy_(forward_batch.extend_seq_lens)
+            self.cuda_graph_buffer.extend_prefix_lens[:raw_bs].copy_(forward_batch.extend_prefix_lens)
+            self.cuda_graph_buffer.extend_start_loc[:raw_bs].copy_(forward_batch.extend_start_loc)
+            self.cuda_graph_buffer.extend_logprob_start_lens_cpu[:raw_bs].copy_(torch.tensor(forward_batch.extend_logprob_start_lens_cpu, device="cpu"))
+            self.cuda_graph_buffer.extend_seq_lens_cpu[:raw_bs].copy_(torch.tensor(forward_batch.extend_seq_lens_cpu, device="cpu"))
+            self.cuda_graph_buffer.extend_prefix_lens_cpu[:raw_bs].copy_(torch.tensor(forward_batch.extend_prefix_lens_cpu, device="cpu"))
         self.cuda_graph_buffer.out_cache_loc[:raw_num_token].copy_(
             forward_batch.out_cache_loc
         )
@@ -1081,7 +1137,8 @@ class CudaGraphRunner:
             seq_lens_sum_pad = (
                 forward_batch.seq_lens_sum + (bs - raw_bs) * self.seq_len_fill_value
             )
-
+        #print(f"{forward_batch.seq_lens_cpu.tolist()=}, {self.seq_lens_cpu.tolist()=}")
+        #print(f"{bs=}, {raw_bs=}, {seq_lens_cpu.tolist()=}")
         self.model_runner.attn_backend.init_forward_metadata_replay_cuda_graph(
             bs,
             self.cuda_graph_buffer.req_pool_indices[:bs],
@@ -1122,6 +1179,18 @@ class CudaGraphRunner:
             )
 
         # Replay
+        print(f"replay: {self.cuda_graph_buffer.extend_logprob_start_lens_cpu[:self.raw_bs].tolist()=}")
+        print(f"replay: {self.cuda_graph_buffer.extend_seq_lens_cpu[:self.raw_bs].tolist()=}")
+        print(f"replay: {self.cuda_graph_buffer.extend_prefix_lens_cpu[:self.raw_bs].tolist()=}")
+        print(f"replay: {self.cuda_graph_buffer.extend_seq_lens[:self.raw_bs].tolist()=}")
+        print(f"replay: {self.cuda_graph_buffer.extend_prefix_lens[:self.raw_bs].tolist()=}")
+        print(f"replay: {self.cuda_graph_buffer.extend_start_loc[:self.raw_bs].tolist()=}")
+        print(f"replay: {self.cuda_graph_buffer.seq_lens[:self.raw_bs].tolist()=}")
+        print(f"replay: {self.cuda_graph_buffer.seq_lens_cpu[:self.raw_bs].tolist()=}")
+        print(f"replay: {self.cuda_graph_buffer.req_pool_indices[:self.raw_bs].tolist()=}")
+        print(f"replay: {self.cuda_graph_buffer.input_ids[:self.raw_num_token].tolist()=}") 
+        print(f"replay: {self.cuda_graph_buffer.positions[:self.raw_num_token].tolist()=}")
+        print(f"replay: {self.cuda_graph_buffer.out_cache_loc[:self.raw_num_token].tolist()=}")
         if forward_batch.forward_mode.is_extend():
             self.cuda_graph_buffer.graphs[self.num_token][self.raw_bs].replay()
             output = self.cuda_graph_buffer.output_buffers[self.num_token][self.raw_bs]

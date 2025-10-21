@@ -465,11 +465,12 @@ class FlashInferAttnBackend(AttentionBackend):
             else:
                 prefill_cuda_graph_metadata_tmp = self.prefill_cuda_graph_metadata[bs]
             prefix_lens = extend_prefix_lens if forward_mode.is_extend() else None
+            extend_seq_lens_sum = seq_lens[:bs].sum().item()
             self.indices_updater_prefill.update(
                 req_pool_indices[:bs],
                 seq_lens[:bs],
                 seq_lens_cpu[:bs] if seq_lens_cpu is not None else None,
-                seq_lens_sum,
+                extend_seq_lens_sum,
                 prefix_lens=prefix_lens,
                 prefill_wrappers=prefill_cuda_graph_metadata_tmp,
                 use_ragged=False,
@@ -900,7 +901,14 @@ class FlashInferIndicesUpdaterPrefill:
         else:
             paged_kernel_lens = seq_lens
             paged_kernel_lens_sum = seq_lens_sum
-
+        print("single wrapper")
+        print(f"{req_pool_indices.shape=}, {req_pool_indices.tolist()=}")
+        print(f"{seq_lens.shape=}, {seq_lens.tolist()=}")
+        print(f"{seq_lens_cpu.shape=}, {seq_lens_cpu.tolist()=}")
+        print(f"{prefix_lens.shape=}, {prefix_lens.tolist()=}")
+        print(f"{use_ragged=}, {seq_lens_sum=}")
+        print(f"{spec_info=}, {encoder_lens=}")
+        print(f"{paged_kernel_lens.tolist=}, {paged_kernel_lens_sum=}")
         self.call_begin_forward(
             self.prefill_wrapper_ragged,
             prefill_wrappers[0],
@@ -1077,6 +1085,7 @@ class FlashInferIndicesUpdaterPrefill:
             )
 
         # cached part
+        print(f"call_begin_forward: {kv_indptr.tolist()=} , {qo_indptr.tolist()=}, {kv_indices[:50].tolist()=}, {self.kv_last_page_len[:bs].tolist()}, {custom_mask=}")
         wrapper_paged.begin_forward(
             qo_indptr,
             kv_indptr,

@@ -1734,6 +1734,18 @@ class ModelRunner:
         if not skip_attn_backend_init:
             self.attn_backend.init_forward_metadata(forward_batch)
 
+        print(f"forward: {forward_batch.extend_logprob_start_lens_cpu[:self.raw_bs].tolist()=}")
+        print(f"forward: {forward_batch.extend_seq_lens_cpu[:self.raw_bs].tolist()=}")
+        print(f"forward: {forward_batch.extend_prefix_lens_cpu[:self.raw_bs].tolist()=}")
+        print(f"forward: {forward_batch.extend_seq_lens[:self.raw_bs].tolist()=}")
+        print(f"forward: {forward_batch.extend_prefix_lens[:self.raw_bs].tolist()=}")
+        print(f"forward: {forward_batch.extend_start_loc[:self.raw_bs].tolist()=}")
+        print(f"forward: {forward_batch.seq_lens[:self.raw_bs].tolist()=}")
+        print(f"forward: {forward_batch.seq_lens_cpu[:self.raw_bs].tolist()=}")
+        print(f"forward: {forward_batch.req_pool_indices[:self.raw_bs].tolist()=}")
+        print(f"forward: {forward_batch.input_ids[:self.raw_num_token].tolist()=}") 
+        print(f"forward: {forward_batch.positions[:self.raw_num_token].tolist()=}")
+        print(f"forward: {forward_batch.out_cache_loc[:self.raw_num_token].tolist()=}")
         kwargs = {}
         if self.support_pp:
             kwargs["pp_proxy_tensors"] = pp_proxy_tensors
