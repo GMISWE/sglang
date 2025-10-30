@@ -1463,15 +1463,41 @@ else:
         return output, scale
 
 
-fp8_autotune = triton.autotune(
-    configs=[
-        triton.Config({"BLOCK_M": block_m}, num_warps=num_warps)
-        for block_m in [16, 32, 64, 128]
-        for num_warps in [2, 4, 8]
-    ],
-    key=["K", "BLOCK_K", "M_ALIGNMENT"],
-)
+def _create_fp8_autotune():
+    """Create fp8 autotune decorator only if GPU drivers are available."""
+    try:
+        # First check if we're on CPU-only environment
+        if _is_cpu:
+            logger.info("CPU-only environment detected, skipping Triton autotuner")
+            def identity_decorator(func):
+                return func
+            return identity_decorator
+        
+        # Check if GPU drivers are available by attempting to get benchmarker
+        import triton.runtime.driver as triton_driver
+        if hasattr(triton_driver, 'active') and triton_driver.active is not None:
+            # Try to access the benchmarker to see if drivers are available
+            _ = triton_driver.active.get_benchmarker()
+        else:
+            # No active driver available
+            raise RuntimeError("No active Triton drivers available")
+        
+        return triton.autotune(
+            configs=[
+                triton.Config({"BLOCK_M": block_m}, num_warps=num_warps)
+                for block_m in [16, 32, 64, 128]
+                for num_warps in [2, 4, 8]
+            ],
+            key=["K", "BLOCK_K", "M_ALIGNMENT"],
+        )
+    except (RuntimeError, AttributeError, Exception) as e:
+        # If no GPU drivers available, return identity decorator
+        logger.warning(f"GPU drivers not available for Triton autotuner, falling back to non-autotuned version: {e}")
+        def identity_decorator(func):
+            return func
+        return identity_decorator
 
+fp8_autotune = _create_fp8_autotune()
 
 @triton.jit
 def _per_token_group_quant_fp8_hopper_moe_mn_major(
