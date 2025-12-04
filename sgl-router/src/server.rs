@@ -24,8 +24,9 @@ use crate::{
     core::{
         worker_to_info,
         workflow::{
-            create_mcp_registration_workflow, create_worker_registration_workflow,
-            create_worker_removal_workflow, LoggingSubscriber, WorkflowEngine,
+            create_external_worker_registration_workflow, create_mcp_registration_workflow,
+            create_worker_registration_workflow, create_worker_removal_workflow, LoggingSubscriber,
+            WorkflowEngine,
         },
         Job, JobQueue, JobQueueConfig, WorkerManager, WorkerType,
     },
@@ -136,9 +137,10 @@ async fn generate(
     headers: http::HeaderMap,
     Json(body): Json<GenerateRequest>,
 ) -> Response {
+    let model_id = body.model.as_deref();
     state
         .router
-        .route_generate(Some(&headers), &body, None)
+        .route_generate(Some(&headers), &body, model_id)
         .await
 }
 
@@ -147,7 +149,10 @@ async fn v1_chat_completions(
     headers: http::HeaderMap,
     ValidatedJson(body): ValidatedJson<ChatCompletionRequest>,
 ) -> Response {
-    state.router.route_chat(Some(&headers), &body, None).await
+    state
+        .router
+        .route_chat(Some(&headers), &body, Some(&body.model))
+        .await
 }
 
 async fn v1_completions(
@@ -157,7 +162,7 @@ async fn v1_completions(
 ) -> Response {
     state
         .router
-        .route_completion(Some(&headers), &body, None)
+        .route_completion(Some(&headers), &body, Some(&body.model))
         .await
 }
 
@@ -166,7 +171,10 @@ async fn rerank(
     headers: http::HeaderMap,
     ValidatedJson(body): ValidatedJson<RerankRequest>,
 ) -> Response {
-    state.router.route_rerank(Some(&headers), &body, None).await
+    state
+        .router
+        .route_rerank(Some(&headers), &body, Some(&body.model))
+        .await
 }
 
 async fn v1_rerank(
@@ -174,20 +182,21 @@ async fn v1_rerank(
     headers: http::HeaderMap,
     Json(body): Json<V1RerankReqInput>,
 ) -> Response {
+    let rerank_body = &body.into();
     state
         .router
-        .route_rerank(Some(&headers), &body.into(), None)
+        .route_rerank(Some(&headers), rerank_body, Some(&rerank_body.model))
         .await
 }
 
 async fn v1_responses(
     State(state): State<Arc<AppState>>,
     headers: http::HeaderMap,
-    Json(body): Json<ResponsesRequest>,
+    ValidatedJson(body): ValidatedJson<ResponsesRequest>,
 ) -> Response {
     state
         .router
-        .route_responses(Some(&headers), &body, None)
+        .route_responses(Some(&headers), &body, Some(&body.model))
         .await
 }
 
@@ -198,7 +207,7 @@ async fn v1_embeddings(
 ) -> Response {
     state
         .router
-        .route_embeddings(Some(&headers), &body, None)
+        .route_embeddings(Some(&headers), &body, Some(&body.model))
         .await
 }
 
@@ -209,7 +218,7 @@ async fn v1_classify(
 ) -> Response {
     state
         .router
-        .route_classify(Some(&headers), &body, None)
+        .route_classify(Some(&headers), &body, Some(&body.model))
         .await
 }
 
@@ -530,6 +539,7 @@ async fn get_worker(State(state): State<Arc<AppState>>, Path(url): Path<String>)
             is_healthy: false,
             load: 0,
             connection_mode: "unknown".to_string(),
+            runtime_type: None,
             tokenizer_path: None,
             reasoning_parser: None,
             tool_parser: None,
@@ -743,6 +753,7 @@ pub async fn startup(config: ServerConfig) -> Result<(), Box<dyn std::error::Err
         .await;
 
     engine.register_workflow(create_worker_registration_workflow(&config.router_config));
+    engine.register_workflow(create_external_worker_registration_workflow());
     engine.register_workflow(create_worker_removal_workflow());
     engine.register_workflow(create_mcp_registration_workflow());
     app_context
