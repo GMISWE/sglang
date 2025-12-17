@@ -952,18 +952,17 @@ def load_image(
             image = Image.open(BytesIO(image_file))
     elif image_file.startswith("http://") or image_file.startswith("https://"):
         timeout = int(os.getenv("REQUEST_TIMEOUT", "3"))
-        response = requests.get(image_file, stream=True, timeout=timeout)
+        response = requests.get(image_file, timeout=timeout)
         try:
             response.raise_for_status()
+            # Use response.content instead of response.raw for better reliability
+            content = response.content
             # Check if it's SVG
-            if _is_svg(image_file):
-                # Read the full content for SVG
-                svg_data = response.content
-                png_data = _convert_svg_to_png(svg_data)
+            if _is_svg(image_file, content):
+                png_data = _convert_svg_to_png(content)
                 image = Image.open(BytesIO(png_data))
             else:
-                image = Image.open(response.raw)
-            image.load()  # Force loading to avoid issues after closing the stream
+                image = Image.open(BytesIO(content))
         finally:
             response.close()
     elif image_file.lower().endswith(("png", "jpg", "jpeg", "webp", "gif", "svg")):
