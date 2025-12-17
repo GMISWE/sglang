@@ -8,6 +8,7 @@ from sglang.srt.environ import envs
 from sglang.srt.function_call.base_format_detector import BaseFormatDetector
 from sglang.srt.function_call.core_types import (
     StreamingParseResult,
+    StructureInfo,
     ToolCallItem,
     _GetInfoFunc,
 )
@@ -238,4 +239,20 @@ class GptOssDetector(BaseFormatDetector):
         )
 
     def structure_info(self) -> _GetInfoFunc:
-        raise NotImplementedError("structure_info not used with HarmonyParser")
+        """
+        Return function that creates StructureInfo for Harmony-format tool calls.
+        
+        Harmony format uses structural tags to constrain the JSON arguments
+        between <|constrain|>json<|message|> and <|call|> markers.
+        """
+        def get_info(name: str) -> StructureInfo:
+            # Harmony format: <|channel|>commentary to=functions.{name}<|constrain|>json<|message|>{json_args}<|call|>
+            # The structural_tag will apply JSON schema constraints to the content between
+            # <|message|> and <|call|> tokens
+            return StructureInfo(
+                begin=f"<|channel|>commentary to=functions.{name}<|constrain|>json<|message|>",
+                end="<|call|>",
+                trigger="<|channel|>commentary",
+            )
+        
+        return get_info

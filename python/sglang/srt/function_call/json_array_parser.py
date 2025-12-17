@@ -42,6 +42,10 @@ class JsonArrayParser(BaseFormatDetector):
         """
         return super().parse_streaming_increment(new_text, tools)
 
+    def supports_structural_tag(self) -> bool:
+        """JSON schema constraints don't use structural_tag."""
+        return False
+
     def structure_info(self) -> callable:
         """
         Return a function that creates StructureInfo for constrained generation.
