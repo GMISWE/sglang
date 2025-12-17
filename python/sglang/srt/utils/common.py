@@ -906,6 +906,33 @@ class ImageData:
     detail: Optional[Literal["auto", "low", "high"]] = "auto"
 
 
+def _convert_svg_to_png(svg_data: bytes) -> bytes:
+    """Convert SVG data to PNG format using cairosvg."""
+    try:
+        import cairosvg
+        return cairosvg.svg2png(bytestring=svg_data)
+    except ImportError:
+        raise ImportError(
+            "cairosvg is required to load SVG images. "
+            "Install it with: pip install cairosvg"
+        )
+
+
+def _is_svg(url_or_path: str, data: bytes = None) -> bool:
+    """Check if the image is an SVG file."""
+    # Check by extension
+    if url_or_path.lower().endswith(".svg"):
+        return True
+    # Check by content (SVG files typically start with <?xml or <svg)
+    if data:
+        try:
+            content_start = data[:200].decode("utf-8", errors="ignore").strip()
+            return content_start.startswith(("<?xml", "<svg"))
+        except:
+            pass
+    return False
+
+
 def load_image(
     image_file: Union[Image.Image, str, ImageData, bytes],
 ) -> tuple[Image.Image, tuple[int, int]]:
@@ -917,18 +944,37 @@ def load_image(
         image = image_file
         image_size = (image.width, image.height)
     elif isinstance(image_file, bytes):
-        image = Image.open(BytesIO(image_file))
+        # Check if it's SVG
+        if _is_svg("", image_file):
+            png_data = _convert_svg_to_png(image_file)
+            image = Image.open(BytesIO(png_data))
+        else:
+            image = Image.open(BytesIO(image_file))
     elif image_file.startswith("http://") or image_file.startswith("https://"):
         timeout = int(os.getenv("REQUEST_TIMEOUT", "3"))
         response = requests.get(image_file, stream=True, timeout=timeout)
         try:
             response.raise_for_status()
-            image = Image.open(response.raw)
+            # Check if it's SVG
+            if _is_svg(image_file):
+                # Read the full content for SVG
+                svg_data = response.content
+                png_data = _convert_svg_to_png(svg_data)
+                image = Image.open(BytesIO(png_data))
+            else:
+                image = Image.open(response.raw)
             image.load()  # Force loading to avoid issues after closing the stream
         finally:
             response.close()
-    elif image_file.lower().endswith(("png", "jpg", "jpeg", "webp", "gif")):
-        image = Image.open(image_file)
+    elif image_file.lower().endswith(("png", "jpg", "jpeg", "webp", "gif", "svg")):
+        if image_file.lower().endswith(".svg"):
+            # Read SVG file and convert to PNG
+            with open(image_file, "rb") as f:
+                svg_data = f.read()
+            png_data = _convert_svg_to_png(svg_data)
+            image = Image.open(BytesIO(png_data))
+        else:
+            image = Image.open(image_file)
     elif image_file.startswith("data:"):
         image_file = image_file.split(",")[1]
         image = Image.open(BytesIO(pybase64.b64decode(image_file, validate=True)))
