@@ -918,6 +918,20 @@ def _convert_svg_to_png(svg_data: bytes) -> bytes:
         )
 
 
+def _convert_heic_to_jpeg(heic_data: bytes) -> bytes:
+    """Convert HEIC/HEIF data to JPEG format."""
+    try:
+        from pillow_heif import register_heif_opener
+        register_heif_opener()
+        # After registration, PIL can handle HEIC directly
+        return heic_data
+    except ImportError:
+        raise ImportError(
+            "pillow-heif is required to load HEIC/HEIF images. "
+            "Install it with: pip install pillow-heif"
+        )
+
+
 def _is_svg(url_or_path: str, data: bytes = None) -> bool:
     """Check if the image is an SVG file."""
     # Check by extension
@@ -928,6 +942,22 @@ def _is_svg(url_or_path: str, data: bytes = None) -> bool:
         try:
             content_start = data[:200].decode("utf-8", errors="ignore").strip()
             return content_start.startswith(("<?xml", "<svg"))
+        except:
+            pass
+    return False
+
+
+def _is_heic(url_or_path: str, data: bytes = None) -> bool:
+    """Check if the image is a HEIC/HEIF file."""
+    # Check by extension
+    if url_or_path.lower().endswith((".heic", ".heif")):
+        return True
+    # Check by content (HEIC files have 'ftyp' at offset 4 and 'heic' or 'mif1' nearby)
+    if data and len(data) >= 12:
+        try:
+            # HEIC files start with ftyp box: 0x00 0x00 0x00 [size] 'ftyp' 'heic'/'mif1'
+            if data[4:8] == b'ftyp' and (b'heic' in data[8:24] or b'mif1' in data[8:24]):
+                return True
         except:
             pass
     return False
@@ -948,6 +978,10 @@ def load_image(
         if _is_svg("", image_file):
             png_data = _convert_svg_to_png(image_file)
             image = Image.open(BytesIO(png_data))
+        # Check if it's HEIC
+        elif _is_heic("", image_file):
+            heic_data = _convert_heic_to_jpeg(image_file)
+            image = Image.open(BytesIO(heic_data))
         else:
             image = Image.open(BytesIO(image_file))
     elif image_file.startswith("http://") or image_file.startswith("https://"):
@@ -961,17 +995,27 @@ def load_image(
             if _is_svg(image_file, content):
                 png_data = _convert_svg_to_png(content)
                 image = Image.open(BytesIO(png_data))
+            # Check if it's HEIC (check content first, as URLs may have wrong extensions)
+            elif _is_heic(image_file, content):
+                heic_data = _convert_heic_to_jpeg(content)
+                image = Image.open(BytesIO(heic_data))
             else:
                 image = Image.open(BytesIO(content))
         finally:
             response.close()
-    elif image_file.lower().endswith(("png", "jpg", "jpeg", "webp", "gif", "svg")):
+    elif image_file.lower().endswith(("png", "jpg", "jpeg", "webp", "gif", "svg", "heic", "heif")):
         if image_file.lower().endswith(".svg"):
             # Read SVG file and convert to PNG
             with open(image_file, "rb") as f:
                 svg_data = f.read()
             png_data = _convert_svg_to_png(svg_data)
             image = Image.open(BytesIO(png_data))
+        elif image_file.lower().endswith((".heic", ".heif")):
+            # Read HEIC file and enable HEIC support
+            with open(image_file, "rb") as f:
+                heic_data = f.read()
+            heic_data = _convert_heic_to_jpeg(heic_data)
+            image = Image.open(BytesIO(heic_data))
         else:
             image = Image.open(image_file)
     elif image_file.startswith("data:"):
