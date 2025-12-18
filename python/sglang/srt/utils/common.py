@@ -986,11 +986,31 @@ def load_image(
             image = Image.open(BytesIO(image_file))
     elif image_file.startswith("http://") or image_file.startswith("https://"):
         timeout = int(os.getenv("REQUEST_TIMEOUT", "3"))
-        response = requests.get(image_file, timeout=timeout)
+        # Add User-Agent to avoid basic bot detection
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        response = requests.get(image_file, headers=headers, timeout=timeout)
         try:
             response.raise_for_status()
             # Use response.content instead of response.raw for better reliability
             content = response.content
+            
+            # Check if server returned HTML instead of an image (e.g., anti-bot protection)
+            content_type = response.headers.get('Content-Type', '').lower()
+            if 'text/html' in content_type or (
+                len(content) < 10000 and 
+                (content[:100].lower().startswith(b'<!doctype html') or 
+                 content[:100].lower().startswith(b'<html'))
+            ):
+                error_msg = (
+                    f"Server returned HTML instead of an image (URL: {image_file}). "
+                    f"This may be due to anti-bot protection (e.g., Cloudflare, Incapsula), "
+                    f"authentication requirements, or the URL being invalid. "
+                    f"Content-Type: {content_type}"
+                )
+                raise ValueError(error_msg)
+            
             # Check if it's SVG
             if _is_svg(image_file, content):
                 png_data = _convert_svg_to_png(content)

@@ -5,13 +5,72 @@ including content format detection and message processing.
 """
 
 import logging
+import os
 
 import jinja2
+import requests
 import transformers.utils.chat_template_utils as hf_chat_utils
 
 from sglang.srt.utils import ImageData
 
 logger = logging.getLogger(__name__)
+
+
+def validate_image_url_accessible(url: str, timeout: int = int(os.getenv("REQUEST_TIMEOUT", "3"))) -> None:
+    """
+    Validate that an image URL is accessible before processing.
+    
+    Performs a lightweight HEAD request to check if the URL is reachable
+    and returns valid content. This avoids wasting resources on inaccessible URLs.
+    
+    Args:
+        url: The image URL to validate
+        timeout: Timeout in seconds for the HEAD request
+        
+    Raises:
+        ValueError: If the URL is inaccessible, returns HTML, or has other issues
+    """
+    # Skip validation for data URLs and local files
+    if url.startswith("data:") or not url.startswith(("http://", "https://")):
+        return
+    
+    try:
+        # Use HEAD request for efficiency (doesn't download full image)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36'
+        }
+        response = requests.head(url, headers=headers, timeout=timeout, allow_redirects=True)
+        
+        # Check status code
+        if response.status_code >= 400:
+            raise ValueError(
+                f"Image URL returned error status {response.status_code}: {url}"
+            )
+        
+        # Check if server returned HTML instead of an image
+        content_type = response.headers.get('Content-Type', '').lower()
+        if 'text/html' in content_type:
+            raise ValueError(
+                f"Image URL returned HTML (likely blocked by anti-bot protection or invalid): {url}"
+            )
+        
+        # Optionally check if it looks like an image content type
+        # (but be permissive since some CDNs may return incorrect types)
+        if content_type and not any(t in content_type for t in ['image', 'application/octet-stream', '*/*']):
+            logger.warning(
+                f"Image URL has unexpected Content-Type '{content_type}': {url}. "
+                "Proceeding anyway, but this may fail during loading."
+            )
+            
+    except requests.Timeout:
+        raise ValueError(
+            f"Image URL validation timed out after {timeout}s: {url}. "
+            "The URL may be slow or inaccessible."
+        )
+    except requests.RequestException as e:
+        raise ValueError(
+            f"Image URL is inaccessible: {url}. Error: {str(e)}"
+        )
 
 # ============================================================================
 # JINJA TEMPLATE CONTENT FORMAT DETECTION
@@ -154,9 +213,23 @@ def process_content_for_template_format(
                 chunk_type = chunk.get("type")
 
                 if chunk_type == "image_url":
+                    image_url = chunk["image_url"]["url"]
+                    
+                    # Validate image URL accessibility if enabled (default: disabled for performance)
+                    # Set SGLANG_VALIDATE_IMAGE_URLS=1 to enable early URL validation
+                    if os.getenv("SGLANG_VALIDATE_IMAGE_URLS", "0") == "1":
+                        try:
+                            validate_image_url_accessible(image_url)
+                        except ValueError as e:
+                            logger.warning(f"Image URL validation failed: {e}")
+                            # Re-raise to reject the request early
+                            raise ValueError(
+                                f"Invalid image URL detected during request validation: {e}"
+                            )
+                    
                     image_data.append(
                         ImageData(
-                            url=chunk["image_url"]["url"],
+                            url=image_url,
                             detail=chunk["image_url"].get("detail", "auto"),
                         )
                     )
