@@ -179,7 +179,7 @@ class Glm47MoeDetector(BaseFormatDetector):
             for match_result in match_result_list:
                 # Get function name
                 func_detail = self.func_detail_regex.search(match_result)
-                func_name = func_detail.group(1)
+                func_name = func_detail.group(1).strip()  # Strip whitespace/newlines from function name
                 func_args = func_detail.group(2)
                 arguments = {}
                 if func_args:
