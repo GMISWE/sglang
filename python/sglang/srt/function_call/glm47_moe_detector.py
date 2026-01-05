@@ -418,7 +418,7 @@ class Glm47MoeDetector(BaseFormatDetector):
             )
             if partial_match:
                 func_name = partial_match.group(1).strip()
-                func_args_raw = partial_match.group(2).strip()
+                func_args_raw = (partial_match.group(2) or "").strip()
                 is_tool_end = partial_match.group(3)
 
                 # Initialize state if this is the first tool call
