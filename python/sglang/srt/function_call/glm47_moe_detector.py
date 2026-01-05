@@ -438,7 +438,13 @@ class Glm47MoeDetector(BaseFormatDetector):
 
                 # Send tool name first if not sent yet
                 if not self.current_tool_name_sent:
-                    assert func_name, "func_name should not be empty"
+                    # Only send tool name when we're confident it's complete
+                    # This happens when:
+                    # 1. We have arg_key (func_args_raw is not empty)
+                    # 2. Or the tool call has ended (</tool_call>)
+                    if not func_name or (not func_args_raw and is_tool_end != self.eot_token):
+                        # Function name is empty or may be incomplete, keep waiting
+                        return StreamingParseResult(normal_text="", calls=[])
                     calls.append(
                         ToolCallItem(
                             tool_index=self.current_tool_id,
