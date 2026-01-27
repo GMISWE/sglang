@@ -213,32 +213,44 @@ def process_content_for_template_format(
                 chunk_type = chunk.get("type")
 
                 if chunk_type == "image_url":
-                    image_url = chunk["image_url"]["url"]
-                    
-                    # Validate image URL accessibility if enabled (default: disabled for performance)
+                    image_obj = chunk.get("image_url") or {}
+                    mdp = image_obj.get("max_dynamic_patch", None)
                     # Set SGLANG_VALIDATE_IMAGE_URLS=1 to enable early URL validation
                     if os.getenv("SGLANG_VALIDATE_IMAGE_URLS", "0") == "1":
                         try:
-                            validate_image_url_accessible(image_url)
+                            validate_image_url_accessible(image_obj["url"])
                         except ValueError as e:
                             logger.warning(f"Image URL validation failed: {e}")
                             # Re-raise to reject the request early
                             raise ValueError(
                                 f"Invalid image URL detected during request validation: {e}"
                             )
-                    
+                    # Also allow flat style: chunk["max_dynamic_patch"]
                     image_data.append(
                         ImageData(
-                            url=image_url,
-                            detail=chunk["image_url"].get("detail", "auto"),
+                            url=image_obj["url"],
+                            detail=image_obj.get("detail", "auto"),
+                            max_dynamic_patch=mdp,
                         )
                     )
+
                     if chunk.get("modalities"):
                         modalities.append(chunk.get("modalities"))
                     # Normalize to simple 'image' type for template compatibility
                     processed_content_parts.append({"type": "image"})
                 elif chunk_type == "video_url":
-                    video_data.append(chunk["video_url"]["url"])
+                    video_obj = chunk.get("video_url") or {}
+                    mdp = video_obj.get("max_dynamic_patch", None)
+                    if mdp is None:
+                        video_data.append(chunk["video_url"]["url"])
+                    else:
+                        # Keep structured info for backend, but template only sees {"type":"video"}
+                        video_data.append(
+                            {
+                                "url": video_obj["url"],
+                                "max_dynamic_patch": mdp,
+                            }
+                        )
                     if chunk.get("modalities"):
                         modalities.append(chunk.get("modalities"))
                     # Normalize to simple 'video' type for template compatibility
