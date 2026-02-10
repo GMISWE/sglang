@@ -183,15 +183,32 @@ void cutlass_gemm_blockwise_sm90_fp8_dispatch(
     torch::Tensor const& b,
     torch::Tensor const& a_scales,
     torch::Tensor const& b_scales) {
+  auto m = a.size(0);
   auto k = a.size(1);
   auto n = b.size(1);
 
-  if (k > 3 * n) {
-    cutlass_gemm_caller_blockwise<cutlass_3x_gemm_fp8_blockwise<cutlass::gemm::StreamKScheduler, OutType, 1, 128, 128>>(
-        out, a, b, a_scales, b_scales);
+  // Optimize for small batch size (M < 16) for decode scenarios
+  // Use smaller tile sizes to improve utilization and reduce latency
+  if (m < 16) {
+    // For very small M, use smaller TileSizeM (16) optimized for decode
+    if (k > 3 * n) {
+      cutlass_gemm_caller_blockwise<
+          cutlass_3x_gemm_fp8_blockwise<cutlass::gemm::StreamKScheduler, OutType, 1, 128, 128, 16>>(
+          out, a, b, a_scales, b_scales);
+    } else {
+      cutlass_gemm_caller_blockwise<
+          cutlass_3x_gemm_fp8_blockwise<cutlass::gemm::PersistentScheduler, OutType, 1, 128, 128, 16>>(
+          out, a, b, a_scales, b_scales);
+    }
   } else {
-    cutlass_gemm_caller_blockwise<
-        cutlass_3x_gemm_fp8_blockwise<cutlass::gemm::PersistentScheduler, OutType, 1, 128, 128>>(
-        out, a, b, a_scales, b_scales);
+    // Original logic for larger batch sizes
+    if (k > 3 * n) {
+      cutlass_gemm_caller_blockwise<cutlass_3x_gemm_fp8_blockwise<cutlass::gemm::StreamKScheduler, OutType, 1, 128, 128>>(
+          out, a, b, a_scales, b_scales);
+    } else {
+      cutlass_gemm_caller_blockwise<
+          cutlass_3x_gemm_fp8_blockwise<cutlass::gemm::PersistentScheduler, OutType, 1, 128, 128>>(
+          out, a, b, a_scales, b_scales);
+    }
   }
 }
