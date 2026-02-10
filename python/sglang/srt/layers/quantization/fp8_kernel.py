@@ -1120,14 +1120,25 @@ def w8a8_block_fp8_matmul_triton(
     else:
         # Default config
         # Block-wise quant: BLOCK_SIZE_K must be divisible by block_size[1]
-        config = {
-            "BLOCK_SIZE_M": 64,
-            "BLOCK_SIZE_N": block_size[0],
-            "BLOCK_SIZE_K": block_size[1],
-            "GROUP_SIZE_M": 32,
-            "num_warps": 4,
-            "num_stages": 3,
-        }
+        # Optimize for small batch size (M < 16) for decode scenarios
+        if M < 16:
+            config = {
+                "BLOCK_SIZE_M": 16,  # Smaller block size for better utilization with small M
+                "BLOCK_SIZE_N": block_size[0],
+                "BLOCK_SIZE_K": block_size[1],
+                "GROUP_SIZE_M": 1,   # Smaller group size for better memory access pattern
+                "num_warps": 4,
+                "num_stages": 2,     # Fewer stages to reduce latency
+            }
+        else:
+            config = {
+                "BLOCK_SIZE_M": 64,
+                "BLOCK_SIZE_N": block_size[0],
+                "BLOCK_SIZE_K": block_size[1],
+                "GROUP_SIZE_M": 32,
+                "num_warps": 4,
+                "num_stages": 3,
+            }
 
     needs_masking = bool(K % config["BLOCK_SIZE_K"] != 0)
 
@@ -1175,7 +1186,14 @@ def w8a8_block_fp8_matmul(
     block_size: List[int],
     output_dtype: torch.dtype = torch.float16,
 ) -> torch.Tensor:
+    # For small batch size (M < 16), prefer Triton over DeepGEMM for better latency
+    # DeepGEMM is optimized for larger batch sizes and may have higher overhead for small M
     if output_dtype == torch.bfloat16 and deep_gemm_wrapper.ENABLE_JIT_DEEPGEMM:
+        if A.size(0) < 16:
+            # Use Triton for small batch size to reduce latency
+            return w8a8_block_fp8_matmul_triton(
+                A, B, As, Bs, block_size, output_dtype=output_dtype
+            )
         return w8a8_block_fp8_matmul_deepgemm(
             A, B, As, Bs, block_size, output_dtype=output_dtype
         )
@@ -1942,15 +1960,21 @@ def triton_scaled_mm(
 
     if use_heuristic:
         is_small_N = N < 8192
-        next_power_of_2_M = max(32, triton.next_power_of_2(M))
-        if next_power_of_2_M <= 32:
-            tile_shape = (64, 64, 256) if is_small_N else (64, 128, 256)
-        elif next_power_of_2_M <= 64:
-            tile_shape = (64, 64, 256)
-        elif next_power_of_2_M <= 128:
-            tile_shape = (64, 128, 128)
+        # Optimize for small batch size (M < 16) for decode scenarios
+        # Use smaller tile sizes to improve utilization and reduce latency
+        if M < 16:
+            # For very small M, use smaller block sizes optimized for decode
+            tile_shape = (16, 128, 128) if is_small_N else (16, 128, 128)
         else:
-            tile_shape = (128, 128, 128)
+            next_power_of_2_M = max(32, triton.next_power_of_2(M))
+            if next_power_of_2_M <= 32:
+                tile_shape = (64, 64, 256) if is_small_N else (64, 128, 256)
+            elif next_power_of_2_M <= 64:
+                tile_shape = (64, 64, 256)
+            elif next_power_of_2_M <= 128:
+                tile_shape = (64, 128, 128)
+            else:
+                tile_shape = (128, 128, 128)
 
     block_size_m, block_size_n, block_size_k = tile_shape
 
