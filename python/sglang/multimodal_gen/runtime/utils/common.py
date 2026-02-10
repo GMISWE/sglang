@@ -22,7 +22,11 @@ def kill_process_tree(parent_pid, include_parent: bool = True, skip_pid: int = N
     """Kill the process and all its child processes."""
     # Remove sigchld handler to avoid spammy logs.
     if threading.current_thread() is threading.main_thread():
-        signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+        # signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+        try:
+            signal.signal(signal.SIGCHLD, signal.SIG_DFL)
+        except ValueError:
+            logger.warning("Could not register signal.SIGCHLD in this environment.")
 
     if parent_pid is None:
         parent_pid = os.getpid()

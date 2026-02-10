@@ -30,15 +30,30 @@ def enable_func_timer():
     from prometheus_client import Histogram
 
     global enable_metrics, FUNC_LATENCY
+
+    # If metrics are already enabled and FUNC_LATENCY is already created, don't recreate it
+    if enable_metrics and FUNC_LATENCY is not None:
+        return
+
     enable_metrics = True
 
-    FUNC_LATENCY = Histogram(
-        "sglang:func_latency_seconds",
-        "Function latency in seconds",
-        # captures latency in range [50ms - ~50s]
-        buckets=exponential_buckets(start=0.05, width=1.5, length=18),
-        labelnames=["name"],
-    )
+    try:
+        FUNC_LATENCY = Histogram(
+            "sglang:func_latency_seconds",
+            "Function latency in seconds",
+            # captures latency in range [50ms - ~50s]
+            buckets=exponential_buckets(start=0.05, width=1.5, length=18),
+            labelnames=["name"],
+        )
+    except ValueError as e:
+        if "Duplicated timeseries in CollectorRegistry" in str(e):
+            # If the metric is already registered, try to get it from the registry
+            import logging
+            logging.getLogger("ray.serve").warning(f"Prometheus metric already registered, reusing existing metric: {e}")
+            # In this case, we'll keep FUNC_LATENCY as None and the decorators will handle it gracefully
+            pass
+        else:
+            raise
 
 
 FUNC_LATENCY = None
@@ -65,7 +80,7 @@ def time_func_latency(
 
         @wraps(func)
         async def async_wrapper(*args, **kwargs):
-            if not enable_metrics:
+            if not enable_metrics or FUNC_LATENCY is None:
                 return await func(*args, **kwargs)
 
             metric = FUNC_LATENCY
@@ -80,7 +95,7 @@ def time_func_latency(
 
         @wraps(func)
         def sync_wrapper(*args, **kwargs):
-            if not enable_metrics:
+            if not enable_metrics or FUNC_LATENCY is None:
                 return func(*args, **kwargs)
 
             metric = FUNC_LATENCY

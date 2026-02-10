@@ -33,7 +33,10 @@ def run_scheduler_with_signal_handling(*args, **kwargs):
         **kwargs: Keyword arguments for run_scheduler_process
     """
     # Ignore SIGINT in this subprocess - let the parent handle it
-    signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+    except ValueError:
+        logger.warning("Could not register signal.SIGINT in this environment.")
 
     # Now run the actual scheduler process
     run_scheduler_process(*args, **kwargs)
