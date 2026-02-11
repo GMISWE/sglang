@@ -437,7 +437,7 @@ class ModelConfig:
             # in transformers v5, rope_scaling is just rope_parameters for backward compatibility
             rope_scaling = self.hf_text_config.rope_scaling
             if rope_scaling and (
-                rope_scaling.get("rope_type") or rope_scaling.get("type") != "default"
+                (rope_scaling.get("rope_type") or rope_scaling.get("type")) != "default"
             ):
                 mscale_all_dim = rope_scaling.get("mscale_all_dim", False)
                 scaling_factor = rope_scaling["factor"]
