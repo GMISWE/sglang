@@ -191,6 +191,13 @@ def flashinfer_allreduce_residual_rmsnorm(
     residual_out = torch.empty_like(residual)
     norm_out = torch.empty_like(input_tensor)
 
+    # Optimize for small batch size (token_num < 16) for decode scenarios
+    # For small batch sizes, prefer oneshot mode for lower latency
+    # According to FlashInfer docs, oneshot is better for small batch sizes
+    if use_oneshot is None:
+        # Auto-select oneshot for small batch sizes to reduce latency
+        use_oneshot = token_num < 16
+
     _flashinfer_comm.trtllm_allreduce_fusion(
         allreduce_in=input_tensor,
         world_size=world_size,

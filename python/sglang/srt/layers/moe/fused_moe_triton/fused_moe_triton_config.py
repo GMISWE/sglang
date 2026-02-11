@@ -163,7 +163,18 @@ def get_default_config(
                 "num_warps": 8,
                 "num_stages": 2 if _is_hip else 4,
             }
-            if M <= E:
+            # Optimize for small batch size (M < 16) for decode scenarios
+            # Use smaller block sizes to improve utilization and reduce latency
+            if M < 16:
+                config = {
+                    "BLOCK_SIZE_M": 16,  # Smaller block size for better utilization with small M
+                    "BLOCK_SIZE_N": 128,
+                    "BLOCK_SIZE_K": 128,
+                    "GROUP_SIZE_M": 1,   # Smaller group size for better memory access pattern
+                    "num_warps": 4,
+                    "num_stages": 2,     # Fewer stages to reduce latency
+                }
+            elif M <= E:
                 config = {
                     "BLOCK_SIZE_M": 64,
                     "BLOCK_SIZE_N": 128,
