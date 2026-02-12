@@ -507,7 +507,55 @@ void sm90_fp8_blockwise_group_mm_dispatch_shape(
   const std::string H20_device_type_str("NVIDIA H20");
   bool is_h20_device = std::string(at::cuda::getCurrentDeviceProperties()->name) == H20_device_type_str;
 
-  if (a.size(0) <= 2048) {
+  // Optimize for very small batch sizes (M <= 16) to minimize padding waste
+  // For batch sizes 1, 2, 4, 6, 8, a.size(0) = M * topk (after padding) is typically 2-16
+  if (a.size(0) <= 16) {
+    // Use smaller tile shape for very small M to reduce padding
+    struct MmaConfigVerySmallM {
+      // Swap A/B
+      using ElementA = cutlass::float_e4m3_t;
+      using MmaTileShape = Shape<_16, _32, _128>;  // Smaller M dimension to match small batch sizes
+      using ClusterShape = Shape<_1, _1, _1>;
+      using KernelSchedule = cutlass::gemm::KernelPtrArrayTmaWarpSpecializedPingpongFP8Blockwise;
+      using EpilogueSchedule = cutlass::epilogue::PtrArrayTmaWarpSpecializedPingpong;
+      using ScaleConfig =
+          cutlass::detail::Sm90BlockwiseScaleConfig<16, 1, 128, cute::GMMA::Major::K, cute::GMMA::Major::K>;
+      using LayoutSFA = decltype(ScaleConfig::deduce_layoutSFA());
+      using LayoutSFB = decltype(ScaleConfig::deduce_layoutSFB());
+    };
+    run_get_group_gemm_starts<MmaConfigVerySmallM::LayoutSFA, MmaConfigVerySmallM::LayoutSFB, MmaConfigVerySmallM::ScaleConfig>(
+        expert_offsets,
+        a_ptrs,
+        b_ptrs,
+        out_ptrs,
+        a_scales_ptrs,
+        b_scales_ptrs,
+        b_t,
+        a_t,
+        output_t,
+        scales_b_t,
+        scales_a_t,
+        layout_sfa,
+        layout_sfb,
+        problem_sizes,
+        problem_sizes_transpose,
+        true);
+    launch_sm90_fp8_blockwise_scaled_group_mm<OutType, MmaConfigVerySmallM, cutlass::layout::ColumnMajor>(
+        out_ptrs,
+        a_ptrs,
+        b_ptrs,
+        a_scales_ptrs,
+        b_scales_ptrs,
+        stride_a,
+        stride_b,
+        stride_c,
+        layout_sfa,
+        layout_sfb,
+        problem_sizes_transpose,
+        expert_offsets,
+        workspace);
+    output = output_t.t();
+  } else if (a.size(0) <= 2048) {
     run_get_group_gemm_starts<MmaConfigSmallM::LayoutSFA, MmaConfigSmallM::LayoutSFB, MmaConfigSmallM::ScaleConfig>(
         expert_offsets,
         a_ptrs,
