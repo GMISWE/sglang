@@ -641,8 +641,37 @@ def _get_k_and_s_triton(
     _, page_indice_batch_offset = page_indices.shape
     s_offset_in_page = page_size * index_head_dim
 
-    # Launch kernel with one thread per token
+    # CUDA grid.y is limited to 65535. Very long sequences can exceed this and
+    # fail Triton launch with "CUDA invalid argument". Fall back to per-sequence
+    # gathers, which use 1D grids and support long contexts.
+    cuda_grid_y_limit = 65535
     seq_num = seq_lens.shape[0]
+    if max_seq_len > cuda_grid_y_limit or seq_num == 0:
+        seq_lens_list = seq_lens.tolist()
+        token_offset = 0
+        for batch_id, seq_len in enumerate(seq_lens_list):
+            if seq_len <= 0:
+                continue
+            num_pages = (seq_len + page_size - 1) // page_size
+            batch_page_indices = page_indices[batch_id, :num_pages]
+            k_out[token_offset : token_offset + seq_len] = _get_k_triton(
+                buf=buf,
+                page_indices=batch_page_indices,
+                seq_len=seq_len,
+                page_size=page_size,
+                index_head_dim=index_head_dim,
+            )
+            s_out[token_offset : token_offset + seq_len] = _get_s_triton(
+                buf=buf,
+                page_indices=batch_page_indices,
+                seq_len=seq_len,
+                page_size=page_size,
+                index_head_dim=index_head_dim,
+            )
+            token_offset += seq_len
+        return k_out, s_out
+
+    # Launch fused kernel with one program per (batch, token)
     grid = (seq_num, max_seq_len)
     seq_num_pow2 = 1
     while seq_num_pow2 < seq_num:
