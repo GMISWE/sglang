@@ -21,16 +21,6 @@ def int8_scaled_mm(mat_a, mat_b, scales_a, scales_b, out_dtype, bias=None):
     )
 
 
-def fp8_blockwise_scaled_mm(mat_a, mat_b, scales_a, scales_b, out_dtype):
-    return torch.ops.sgl_kernel.fp8_blockwise_scaled_mm.default(
-        mat_a,
-        mat_b,
-        scales_a,
-        scales_b,
-        out_dtype,
-    )
-
-
 def fp8_scaled_mm(mat_a, mat_b, scales_a, scales_b, out_dtype, bias=None):
     return torch.ops.sgl_kernel.fp8_scaled_mm.default(
         mat_a,
@@ -109,10 +99,9 @@ def sgl_per_token_group_quant_8bit(
     masked_m: Optional[torch.Tensor] = None,
     enable_v2: Optional[bool] = None,
 ) -> None:
+    _V2_KERNEL_SUPPORTED_GROUP_SIZES = [16, 32, 64, 128]
     if enable_v2 is None:
-        from sglang.srt.utils import get_bool_env_var
-
-        enable_v2 = get_bool_env_var("SGLANG_PER_TOKEN_GROUP_QUANT_8BIT_V2")
+        enable_v2 = group_size in _V2_KERNEL_SUPPORTED_GROUP_SIZES
 
     if enable_v2:
         return torch.ops.sgl_kernel.sgl_per_token_group_quant_8bit_v2.default(
@@ -146,69 +135,6 @@ def sgl_per_token_quant_fp8(
     output_s: torch.Tensor,
 ) -> None:
     torch.ops.sgl_kernel.sgl_per_token_quant_fp8.default(input, output_q, output_s)
-
-
-def qserve_w4a8_per_chn_gemm(
-    in_feats: torch.Tensor,
-    kernel: torch.Tensor,
-    wscales: torch.Tensor,
-    ascales: torch.Tensor,
-    w_szs: torch.Tensor,
-    a_ssums: torch.Tensor,
-    out_feats: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
-    if out_feats is None:
-        # NOTE(HandH1998): qserve_w4a8_per_chn_gemm only supports out dtype=torch.float16 now
-        out_feats = torch.empty(
-            (in_feats.shape[0], kernel.shape[0]),
-            device=in_feats.device,
-            dtype=torch.float16,
-        )
-    torch.ops.sgl_kernel.qserve_w4a8_per_chn_gemm.default(
-        in_feats, kernel, wscales, ascales, w_szs, a_ssums, out_feats
-    )
-    return out_feats
-
-
-def qserve_w4a8_per_group_gemm(
-    in_feats: torch.Tensor,
-    kernel: torch.Tensor,
-    zeros: torch.Tensor,
-    scales_i8: torch.Tensor,
-    wscales: torch.Tensor,
-    ascales: torch.Tensor,
-    out_feats: Optional[torch.Tensor] = None,
-) -> torch.Tensor:
-    if out_feats is None:
-        # NOTE(HandH1998): qserve_w4a8_per_group_gemm only supports out dtype=torch.float16 now
-        out_feats = torch.empty(
-            (in_feats.shape[0], kernel.shape[0]),
-            device=in_feats.device,
-            dtype=torch.float16,
-        )
-    torch.ops.sgl_kernel.qserve_w4a8_per_group_gemm.default(
-        in_feats, kernel, zeros, scales_i8, wscales, ascales, out_feats
-    )
-    return out_feats
-
-
-def dsv3_router_gemm(
-    hidden_states: torch.Tensor,
-    router_weights: torch.Tensor,
-    out_dtype: torch.dtype = torch.bfloat16,
-) -> torch.Tensor:
-    output = torch.empty(
-        hidden_states.shape[0],
-        router_weights.shape[0],
-        device=hidden_states.device,
-        dtype=out_dtype,
-    )
-    torch.ops.sgl_kernel.dsv3_router_gemm(
-        output,
-        hidden_states,
-        router_weights,
-    )
-    return output
 
 
 def shuffle_rows(input_tensor, dst2src_map, output_tensor_shape):
