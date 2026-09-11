@@ -503,7 +503,7 @@ def test_kimi_k3_encoder_dp_defers_feature_materialization(monkeypatch):
 
 
 def test_kimi_k3_preprocesses_only_dp_owner_images(monkeypatch):
-    """A vision-DP owner uses each assigned image's global grid."""
+    """A vision-DP owner uses each assigned image's grid when preprocessing."""
     from unittest.mock import patch as mock_patch
 
     from sglang.srt.managers.schedule_batch import Modality, MultimodalDataItem
@@ -552,7 +552,7 @@ def test_kimi_k3_preprocesses_only_dp_owner_images(monkeypatch):
         ids = [int(image[0, 0, 0]) for image in images]
         calls.append(ids)
         pixel_values = torch.cat(
-            [torch.full((patch_counts[i], 2), float(i)) for i in ids]
+            [torch.full(size=(patch_counts[i], 2), fill_value=float(i)) for i in ids]
         )
         return pixel_values, torch.tensor([grids[i] for i in ids])
 
